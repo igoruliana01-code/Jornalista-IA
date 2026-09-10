@@ -18,7 +18,7 @@ const schema = {
     confirmed:{type:"array",items:{type:"string"}}, estimates:{type:"array",items:{type:"string"}},
     unconfirmed:{type:"array",items:{type:"string"}}, conflicts:{type:"array",items:{type:"string"}},
     direct_evidence:{type:"array",items:{type:"string"}}, context_evidence:{type:"array",items:{type:"string"}},
-    contradiction_evidence:{type:"array",items:{type:"string"}}, evidence_records:{type:"array",minItems:0,maxItems:20,items:{type:"object",properties:{claim:{type:"string"},source_urls:{type:"array",minItems:0,items:{type:"string"}},level:{type:"string"},evidence_type:{type:"string",enum:["FATO DOCUMENTADO","DECLARAÇÃO","INTERPRETAÇÃO","ALEGAÇÃO","NÃO COMPROVADO"]},relevance:{type:"string",enum:["DIRETA","CONTEXTUAL","FRACA"]},reason:{type:"string"}},required:["claim","source_urls","level","evidence_type","relevance","reason"]}}, source_quality:{type:"string"}, source_check:{type:"string"},
+    contradiction_evidence:{type:"array",items:{type:"string"}}, evidence_records:{type:"array",minItems:0,maxItems:20,items:{type:"object",properties:{claim:{type:"string"},source_urls:{type:"array",minItems:1,items:{type:"string"}},level:{type:"string"},evidence_type:{type:"string",enum:["FATO DOCUMENTADO","DECLARAÇÃO","INTERPRETAÇÃO","ALEGAÇÃO","NÃO COMPROVADO"]},relevance:{type:"string",enum:["DIRETA","CONTEXTUAL","FRACA"]},reason:{type:"string"}},required:["claim","source_urls","level","evidence_type","relevance","reason"]}}, source_quality:{type:"string"}, source_check:{type:"string"},
     sanity_check:{type:"array",items:{type:"string"}},
     sources:{type:"array",items:{type:"object",properties:{title:{type:"string"},url:{type:"string"},why:{type:"string"},type:{type:"string"},tier:{type:"string"}},required:["title","url","why","type","tier"]}},
     hear:{type:"array",items:{type:"string"}}, questions:{type:"array",items:{type:"string"}}, check:{type:"array",items:{type:"string"}},
@@ -104,7 +104,7 @@ TESTE DE SANIDADE:
 
 function modelList(){
   const primary=process.env.GEMINI_MODEL||"gemini-3.5-flash-lite";
-  const configured=(process.env.GEMINI_FALLBACK_MODELS||"gemini-2.5-flash-lite").split(",").map(x=>x.trim()).filter(Boolean);
+  const configured=(process.env.GEMINI_FALLBACK_MODELS||"gemini-3.1-flash-lite").split(",").map(x=>x.trim()).filter(Boolean);
   return [...new Set([primary,...configured])];
 }
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
@@ -249,6 +249,7 @@ function errorKind(error){
   const status=errorStatus(error);
   const msg=String(error?.message||error||"").toLowerCase();
   if(status===429 || /resource_exhausted|quota_exceeded|rate_limit_exceeded|too many requests|rate limit/.test(msg)) return "quota";
+  if(status===404 && /model|not available|not found|does not exist|unavailable to new users|shut ?down|deprecated/.test(msg)) return "model_unavailable";
   if([408,500,502,503,504].includes(status) || /unavailable|overloaded|high demand|timed out|timeout|service unavailable/.test(msg)) return "temporary";
   return "fatal";
 }
@@ -292,8 +293,8 @@ async function generateWithRetry({contents,config={}}){
       const kind=errorKind(error);
       console.error(`GEMINI_ERROR model=${model} kind=${kind} status=${errorStatus(error)} message=${error?.message||error}`);
       if(kind==="fatal") throw error;
-      // Quota 429: não repetir o mesmo pedido. Tentar apenas um modelo alternativo.
-      if(kind==="quota") continue;
+      // 429 ou modelo inacessível: não repetir o mesmo pedido. Tentar apenas o próximo modelo.
+      if(kind==="quota" || kind==="model_unavailable") continue;
       // Erros transitórios: uma espera curta antes de tentar o próximo modelo.
       if(i<models.length-1) await sleep(1800);
     }
@@ -317,7 +318,9 @@ function classifyTier(url="", source=""){
   const tier2Domains=["ge.globo.com","uol.com.br","espn.com.br","terra.com.br","g1.globo.com","folha.uol.com.br","estadao.com.br","cnnbrasil.com.br","gazetaesportiva.com","placar.com.br","lance.com.br","oglobo.globo.com","reuters.com","apnews.com","bbc.com"];
   const tier1Names=["cade","conselho administrativo de defesa econômica","cbf","confederação brasileira de futebol","stf","stj","tribunal de justiça","câmara dos deputados","senado federal","fifa","conmebol","nba"];
   const tier2Names=["uol","espn","g1","globo esporte","bbc","reuters","associated press","ap news","folha","estadao","estadão","cnn brasil","lance","gazeta esportiva","terra","o globo"];
-  if(tier1Domains.some(d=>hostMatches(h,d)) || tier1Names.some(n=>text===n || text.includes(n))) return "TIER 1 · FONTE PRIMÁRIA";
+  if(tier1Domains.some(d=>hostMatches(h,d))) return "TIER 1 · FONTE PRIMÁRIA";
+  // O nome do veículo sozinho não transforma uma URL de terceiro em fonte primária.
+  if(tier1Names.some(n=>text===n || text.includes(n)) && (h.endsWith(".gov.br") || h.endsWith(".jus.br") || h.endsWith(".leg.br") || h.endsWith(".com.br") && (h.includes("cbf") || h.includes("fifa") || h.includes("conmebol") || h.includes("nba")))) return "TIER 1 · FONTE PRIMÁRIA";
   if(tier2Domains.some(d=>hostMatches(h,d)) || tier2Names.some(n=>text===n || text.includes(n))) return "TIER 2 · IMPRENSA CONSOLIDADA";
   if(/agência brasil|agencia brasil/.test(text)) return "TIER 2 · IMPRENSA CONSOLIDADA";
   return "TIER 3 · ESPECIALIZADA";
@@ -345,18 +348,29 @@ function sourceCardData(r, why=""){
   const cleanWhy=cleanSourceText(why||r.description||"");
   return {title:r.title||"Fonte sem título",url,why:cleanWhy.slice(0,220),type:"web",tier:classifyTier(url,r.source||""),provider:r.provider||"Busca externa",domain:display,date:shortDate(r.date)};
 }
+function canonicalUrl(url="") {
+  try {
+    const u=new URL(String(url||"").trim());
+    u.hash="";
+    for(const key of [...u.searchParams.keys()]) if(/^utm_/i.test(key) || /^(gclid|fbclid|mc_cid|mc_eid)$/i.test(key)) u.searchParams.delete(key);
+    return u.toString().replace(/\/$/,"");
+  } catch {
+    return String(url||"").trim().replace(/\/$/,"");
+  }
+}
 function normalizeSources(data,research){
   const external=research.results.map(r=>sourceCardData(r,`Resultado encontrado na pesquisa externa. ${cleanSourceText(r.description||"")}`.trim()));
   const generated=Array.isArray(data.sources)?data.sources:[];
-  const allowed=new Map(external.map(x=>[x.url,x]));
+  const allowed=new Map(external.map(x=>[canonicalUrl(x.url),x]));
   const final=[];
   for(const s of generated){
-    if(s?.url && allowed.has(s.url)){
-      const base=allowed.get(s.url);
+    const key=canonicalUrl(s?.url);
+    if(key && allowed.has(key)){
+      const base=allowed.get(key);
       final.push({...base,why:cleanSourceText(s.why||base.why).slice(0,320),tier:classifyTier(base.url,base.domain||"")});
     }
   }
-  for(const s of external) if(!final.some(x=>x.url===s.url)) final.push(s);
+  for(const s of external) if(!final.some(x=>canonicalUrl(x.url)===canonicalUrl(s.url))) final.push(s);
   return final.slice(0,8);
 }
 function classifyStatus(data){
@@ -369,7 +383,7 @@ function classifyStatus(data){
   return "NÃO CONFIRMADO";
 }
 function normalizeEvidenceRecords(data,research){
-  const allowed=new Map(research.results.map(r=>[r.url,{title:r.title,url:r.url}]));
+  const allowed=new Map(research.results.map(r=>[canonicalUrl(r.url),{title:r.title,url:r.url}]));
   const records=Array.isArray(data.evidence_records)?data.evidence_records:[];
   const clean=[];
   const typeMap={"FATO DOCUMENTADO":"FATO DOCUMENTADO","DECLARAÇÃO":"DECLARAÇÃO","INTERPRETAÇÃO":"INTERPRETAÇÃO","ALEGAÇÃO":"ALEGAÇÃO","NÃO COMPROVADO":"NÃO COMPROVADO"};
@@ -377,14 +391,14 @@ function normalizeEvidenceRecords(data,research){
   for(const e of records){
     const urls=Array.isArray(e?.source_urls)?e.source_urls.map(x=>String(x||"").trim()).filter(Boolean):[];
     if(e?.source_url) urls.push(String(e.source_url).trim());
-    const validUrls=[...new Set(urls)].filter(u=>allowed.has(u));
+    const validUrls=[...new Set(urls.map(canonicalUrl))].filter(u=>allowed.has(u));
     if(!e?.claim || !validUrls.length) continue;
     const level=/^CONFIRMADO$/i.test(String(e.level||""))?"CONFIRMADO":/^PARCIAL/i.test(String(e.level||""))?"PARCIAL":"NÃO CONFIRMADO";
     const evidence_type=typeMap[String(e.evidence_type||"").toUpperCase()]||"NÃO COMPROVADO";
     const relevance=relevanceMap[String(e.relevance||"").toUpperCase()]||"CONTEXTUAL";
-    const sources=validUrls.slice(0,4).map(url=>{
-      const base=allowed.get(url);
-      return {source_title:base.title||cleanSourceText(e.source_title||"Fonte"),source_url:url};
+    const sources=validUrls.slice(0,4).map(key=>{
+      const base=allowed.get(key);
+      return {source_title:base.title||cleanSourceText(e.source_title||"Fonte"),source_url:base.url};
     });
     clean.push({claim:cleanSourceText(e.claim).slice(0,320),level,evidence_type,relevance,source_title:sources.map(x=>x.source_title).join(" | "),source_url:sources[0].source_url,source_urls:sources.map(x=>x.source_url),reason:cleanSourceText(e.reason||"A fonte foi encontrada na busca externa; revise a natureza e a relevância desta evidência.").slice(0,260)});
   }
@@ -507,7 +521,7 @@ async function analyze(body){
     throw e;
   }
   try{
-    const {response,model}=await generateWithRetry({contents:basePrompt(body,research),config:{responseMimeType:"application/json",responseSchema:schema,temperature:0.1}});
+    const {response,model}=await generateWithRetry({contents:basePrompt(body,research),config:{responseMimeType:"application/json",responseSchema:schema}});
     let raw=response?.text||""; let data;
     try{data=JSON.parse(raw);}catch{data=JSON.parse(raw.replace(/^```json\s*/i,"").replace(/\s*```$/i,"").trim());}
     data=enforceSafety(data,research); data=applyEvidenceSemantics(data,body,research); data=enforceAnalyticalGuardrails(data,body); data.note=(data.note||"")+` Motor Gemini: ${model}.`;
@@ -563,7 +577,7 @@ app.post("/api/write",async(req,res)=>{
   try{
     const b=req.body.briefing;if(!b)return res.status(400).json({error:"Briefing ausente."});
     const prompt=`${editorial}\n\nETAPA REDAÇÃO. Use somente os fatos em direct_evidence e confirmed do briefing. Contexto apenas como contexto. Não transforme estimates, unconfirmed ou conflicts em fatos. Se primary_status não for CONFIRMADO, use linguagem claramente condicional. Entregue título, subtítulo, lead, corpo em parágrafos e bloco FONTES.\n\nBRIEFING:\n${JSON.stringify(b)}`;
-    const {response}=await generateWithRetry({contents:prompt,config:{temperature:0.2}});
+    const {response}=await generateWithRetry({contents:prompt});
     res.json({text:response.text});
   }catch(e){res.status(isTransientError(e)?503:500).json({error:isTransientError(e)?"O Gemini gratuito está temporariamente no limite.":(e.message||"Erro ao redigir.")});}
 });
@@ -573,13 +587,13 @@ app.post("/api/factcheck",async(req,res)=>{
     if(!req.body.text?.trim())return res.status(400).json({error:"Cole um texto para checar."});
     const research=await externalSearch({topic:req.body.text.slice(0,900),area:"Fact-check",format:"Checagem",sources:""});
     const prompt=`${editorial}\n\nFAÇA UM FACT-CHECK. O texto abaixo contém afirmações verificáveis. Use a BUSCA EXTERNA fornecida. Para cada afirmação, classifique como CONFIRMADA, PARCIAL, NÃO CONFIRMADA ou CONTRADITA, cite a URL disponível que sustenta a classificação e explique a correção necessária. Não declare falsidade sem evidência direta.\n\n${formatResearch(research)}\n\nTEXTO:\n${req.body.text}`;
-    const {response}=await generateWithRetry({contents:prompt,config:{temperature:0.1}});
+    const {response}=await generateWithRetry({contents:prompt});
     res.json({text:response.text});
   }catch(e){res.status(isTransientError(e)?503:500).json({error:isTransientError(e)?"O Gemini gratuito está temporariamente no limite.":(e.message||"Erro no fact-check.")});}
 });
 
-app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.6.10-audited",search:"external-rss-gdelt",gemini:"interactions-api"}));
+app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.6.13-audited",search:"external-rss-gdelt",gemini:"interactions-api",models:modelList()}));
 app.get("/api/search-test",async(req,res)=>{try{const r=await externalSearch({topic:req.query.q||"notícias Brasil",area:"Geral",format:"Pesquisa"});res.json({ok:true,queries:r.queries,count:r.results.length,results:r.results.slice(0,8)});}catch(e){res.status(502).json({ok:false,error:e.message});}});
 app.use((req,res)=>req.method==="GET"?res.sendFile(path.join(__dirname,"index.html")):res.status(404).json({error:"Rota não encontrada."}));
 const PORT=process.env.PORT||3000;
-app.listen(PORT,"0.0.0.0",()=>console.log(`Jornalista AI V8.6.10 Auditada online na porta ${PORT}`));
+app.listen(PORT,"0.0.0.0",()=>console.log(`Jornalista AI V8.6.12 Auditada online na porta ${PORT}`));
