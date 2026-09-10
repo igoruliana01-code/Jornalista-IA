@@ -65,12 +65,56 @@ Depois produza também headline, subtítulo e lead APENAS como rascunhos editori
 As URLs devem ser reais quando fornecidas pela pesquisa. Nunca invente URL.`;
 }
 
-async function callGemini(body,useSearch=true){
+function isTransientError(error){
+ const status=Number(error?.status||error?.statusCode||error?.code);
+ const message=String(error?.message||error||"").toLowerCase();
+ return [408,429,500,502,503,504].includes(status) ||
+        /503|unavailable|overloaded|high demand|resource_exhausted|too many requests|rate limit|timed out|timeout/.test(message);
+}
+
+function modelList(){
+ const primary=process.env.GEMINI_MODEL||"gemini-3.8-flash";
+ const configured=(process.env.GEMINI_FALLBACK_MODELS||"gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite")
+  .split(",").map(x=>x.trim()).filter(Boolean);
+ return [...new Set([primary,...configured])];
+}
+
+function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms));}
+
+async function generateWithRetry({contents,config={},search=true}){
  const ai=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});
- const config={responseMimeType:"application/json",responseSchema:schema,temperature:0.2};
- if(useSearch) config.tools=[{googleSearch:{}}];
- const r=await ai.models.generateContent({model:process.env.GEMINI_MODEL||"gemini-3.8-flash",contents:promptFor(body),config});
- return JSON.parse(r.text);
+ const models=modelList();
+ let lastError=null;
+
+ for(const model of models){
+  for(let attempt=1;attempt<=3;attempt++){
+   try{
+    const finalConfig={...config};
+    if(search) finalConfig.tools=[{googleSearch:{}}];
+    const r=await ai.models.generateContent({model,contents,config:finalConfig});
+    return {response:r,model};
+   }catch(error){
+    lastError=error;
+    if(!isTransientError(error)) throw error;
+    const wait=Math.min(8000,1000*Math.pow(2,attempt-1))+Math.floor(Math.random()*500);
+    console.warn(`Gemini indisponível (${model}, tentativa ${attempt}/3). Nova tentativa em ${wait}ms.`);
+    if(attempt<3) await sleep(wait);
+   }
+  }
+  console.warn(`Modelo ${model} esgotou as tentativas; tentando modelo reserva.`);
+ }
+ throw lastError||new Error("Gemini indisponível no momento.");
+}
+
+async function callGemini(body,useSearch=true){
+ const {response,model}=await generateWithRetry({
+  contents:promptFor(body),
+  config:{responseMimeType:"application/json",responseSchema:schema,temperature:0.2},
+  search:useSearch
+ });
+ const data=JSON.parse(response.text);
+ data.note=(data.note||"")+` Motor utilizado: ${model}.`;
+ return data;
 }
 
 app.post("/api/analyze",async(req,res)=>{
@@ -80,17 +124,26 @@ app.post("/api/analyze",async(req,res)=>{
   try{return res.json(await callGemini(req.body,true));}
   catch(searchError){
    console.warn("Pesquisa Google indisponível; tentando modo Gemini sem Search:",searchError.message);
-   const data=await callGemini(req.body,false);
-   data.note=(data.note||"")+" A pesquisa automática na web não ficou disponível nesta consulta; valide as fontes manualmente.";
-   return res.json(data);
+   try{
+    const data=await callGemini(req.body,false);
+    data.note=(data.note||"")+" A pesquisa automática na web não ficou disponível nesta consulta; valide as fontes manualmente.";
+    return res.json(data);
+   }catch(finalError){
+    throw finalError;
+   }
   }
- }catch(e){console.error(e);res.status(500).json({error:e.message||"Erro no Gemini."});}
+ }catch(e){
+  console.error(e);
+  const message=isTransientError(e)
+   ? "O Gemini está temporariamente congestionado. Tente novamente em alguns segundos."
+   : (e.message||"Erro no Gemini.");
+  res.status(503).json({error:message});
+ }
 });
 
 app.post("/api/write",async(req,res)=>{
  try{
   if(!process.env.GEMINI_API_KEY) return res.status(500).json({error:"Chave GEMINI_API_KEY não configurada."});
-  const ai=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});
   const text=`${editorial}
 Transforme o briefing abaixo em um RASCUNHO jornalístico.
 Não acrescente nenhum fato que não esteja no briefing.
@@ -98,30 +151,41 @@ Marque incertezas no próprio texto quando necessário.
 Entregue: título, subtítulo, lead e corpo em parágrafos.
 BRIEFING:
 ${JSON.stringify(req.body.briefing)}`;
-  const r=await ai.models.generateContent({model:process.env.GEMINI_MODEL||"gemini-3.8-flash",contents:text});
-  res.json({text:r.text});
- }catch(e){res.status(500).json({error:e.message||"Erro ao redigir."});}
+  const {response}=await generateWithRetry({contents:text,config:{},search:false});
+  res.json({text:response.text});
+ }catch(e){
+  console.error(e);
+  const message=isTransientError(e)
+   ? "O Gemini está temporariamente congestionado. Tente novamente em alguns segundos."
+   : (e.message||"Erro ao redigir.");
+  res.status(503).json({error:message});
+ }
 });
 
 app.post("/api/factcheck",async(req,res)=>{
  try{
   if(!process.env.GEMINI_API_KEY) return res.status(500).json({error:"Chave GEMINI_API_KEY não configurada."});
-  const ai=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});
   const text=`${editorial}
 Faça uma checagem editorial do texto abaixo.
 Separe afirmações verificáveis, possíveis problemas, dados sem fonte, exageros e sugestões de correção.
 Não declare uma afirmação falsa sem evidência.
 TEXTO:
 ${req.body.text}`;
-  const r=await ai.models.generateContent({model:process.env.GEMINI_MODEL||"gemini-3.8-flash",contents:text,config:{tools:[{googleSearch:{}}]}});
-  res.json({text:r.text});
- }catch(e){res.status(500).json({error:e.message||"Erro no fact-check."});}
+  const {response}=await generateWithRetry({contents:text,config:{},search:true});
+  res.json({text:response.text});
+ }catch(e){
+  console.error(e);
+  const message=isTransientError(e)
+   ? "O Gemini está temporariamente congestionado. Tente novamente em alguns segundos."
+   : (e.message||"Erro no fact-check.");
+  res.status(503).json({error:message});
+ }
 });
 
 app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI"}));
 app.use((req,res)=>{
-  if(req.method === "GET") return res.sendFile(path.join(__dirname,"index.html"));
-  return res.status(404).json({error:"Rota não encontrada."});
+ if(req.method === "GET") return res.sendFile(path.join(__dirname,"index.html"));
+ return res.status(404).json({error:"Rota não encontrada."});
 });
 const PORT=process.env.PORT||3000;
 app.listen(PORT,"0.0.0.0",()=>console.log(`Jornalista AI online na porta ${PORT}`));
