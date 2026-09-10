@@ -15,6 +15,8 @@ const schema={
  properties:{
   status:{type:"string"},
   confidence:{type:"integer"},
+  primary_status:{type:"string"},
+  primary_evidence:{type:"string"},
   summary:{type:"string"},
   confirmed:{type:"array",items:{type:"string"}},
   estimates:{type:"array",items:{type:"string"}},
@@ -32,13 +34,21 @@ const schema={
   risks:{type:"array",items:{type:"string"}},
   note:{type:"string"}
  },
- required:["status","confidence","summary","confirmed","estimates","unconfirmed","conflicts","sources","hear","questions","check","angle","structure","headline","dek","lead","risks","note"]
+ required:["status","confidence","primary_status","primary_evidence","summary","confirmed","estimates","unconfirmed","conflicts","sources","hear","questions","check","angle","structure","headline","dek","lead","risks","note"]
 };
 
 const editorial=`Você é o Jornalista AI, um assistente de apuração para jornalistas.
 PRINCÍPIOS:
 - Não invente fatos, fontes, URLs, declarações, números ou especialistas.
 - Diferencie CONFIRMADO, ESTIMATIVA/PROJEÇÃO, NÃO CONFIRMADO e CONFLITO.
+- Primeiro identifique a PAUTA PRINCIPAL: a afirmação central que o jornalista pretende publicar.
+- O status e a confiança PRINCIPAIS devem medir a evidência da pauta principal, e não a média de todas as informações secundárias encontradas.
+- Um conflito em contexto histórico, estatística secundária ou detalhe lateral NÃO deve derrubar a confiança da pauta principal se fontes confiáveis confirmarem diretamente o fato central.
+- Se fontes oficiais ou múltiplas fontes jornalísticas confiáveis confirmarem diretamente a pauta principal, classifique-a como CONFIRMADO mesmo que existam pontos secundários a checar.
+- Se houver apenas uma fonte confiável para o fato central, seja mais conservador e indique que vale confirmação independente.
+- Se fontes confiáveis contradisserem diretamente o fato central, classifique a pauta principal como CONFLITO ou NÃO CONFIRMADO.
+- Não crie conflito apenas porque uma informação não foi encontrada.
+- Use a seguinte heurística para confidence da PAUTA PRINCIPAL: 90-100 quando há confirmação direta e forte; 75-89 quando há boa evidência mas falta uma confirmação importante; 50-74 quando a evidência é parcial; 20-49 quando há forte incerteza ou conflito; 0-19 quando há evidência forte de que a afirmação central está errada.
 - Prefira fontes primárias e fontes independentes.
 - Para fatos atuais, tente consultar a web quando a ferramenta estiver disponível.
 - Uma única fonte não torna uma alegação verdadeira.
@@ -62,6 +72,8 @@ ${body.sources||"(nenhum)"}
 TAREFA:
 Faça uma apuração inicial. Se pesquisa web estiver disponível, use-a. Analise as evidências, compare versões, classifique a confiabilidade e indique exatamente o que ainda precisa ser checado.
 Depois produza também headline, subtítulo e lead APENAS como rascunhos editoriais coerentes com o grau de confirmação.
+No campo primary_status escreva o status da PAUTA PRINCIPAL. No campo primary_evidence explique em 1-3 frases quais evidências diretas sustentam ou enfraquecem essa pauta principal.
+O campo confidence deve representar EXCLUSIVAMENTE a confiança na PAUTA PRINCIPAL.
 As URLs devem ser reais quando fornecidas pela pesquisa. Nunca invente URL.`;
 }
 
