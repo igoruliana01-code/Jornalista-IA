@@ -1,6 +1,6 @@
 {
-  "name": "jornalista-ai-v8-6-6-evidence-audit",
-  "version": "8.6.6",
+  "name": "jornalista-ai-v8-6-8",
+  "version": "8.6.8",
   "private": true,
   "type": "module",
   "scripts": {

@@ -38,13 +38,18 @@ function sourceHtml(s){
 function sourceList(sources){return (sources||[]).slice(0,8).map(sourceHtml).join("")||"<p class=\"muted\">Nenhuma fonte retornada.</p>";}
 function evidenceLevelClass(level){return /CONFIRMADO/i.test(String(level||""))?"ok":/PARCIAL/i.test(String(level||""))?"warn":"danger";}
 function evidenceTypeClass(type){return type==="FATO DOCUMENTADO"?"fact":type==="DECLARAÇÃO"?"statement":type==="INTERPRETAÇÃO"?"interpretation":type==="ALEGAÇÃO"?"allegation":"unproven";}
+function evidenceBadge(e){
+ const type=String(e?.evidence_type||"").toUpperCase();
+ if(type==="DECLARAÇÃO") return ["statement","REGISTRADA"];
+ if(type==="INTERPRETAÇÃO") return ["interpretation","ANÁLISE"];
+ if(type==="ALEGAÇÃO") return ["allegation","NÃO COMPROVADA"];
+ if(type==="NÃO COMPROVADO") return ["unproven","NÃO COMPROVADO"];
+ return [evidenceLevelClass(e?.level), String(e?.level||"NÃO CONFIRMADO")];
+}
 function evidenceHtml(e){
- const level=esc(e.level||"NÃO CONFIRMADO");
- const type=esc(e.evidence_type||"NÃO COMPROVADO");
- const relevance=esc(e.relevance||"CONTEXTUAL");
- const title=esc(e.source_title||"Fonte");
- const url=esc(e.source_url||"#");
- return `<div class="evidence-item"><div class="evidence-main"><div class="evidence-badges"><span class="evidence-level ${evidenceLevelClass(level)}">${level}</span><span class="evidence-type ${evidenceTypeClass(e.evidence_type)}">${type}</span><span class="evidence-relevance">${relevance}</span></div><b>${esc(e.claim||"—")}</b><p>${esc(e.reason||"")}</p></div><a class="evidence-source" href="${url}" target="_blank" rel="noopener noreferrer">${title} ↗</a></div>`;
+ const [badgeClass,badgeText]=evidenceBadge(e); const type=esc(e.evidence_type||"NÃO COMPROVADO"); const relevance=esc(e.relevance||"CONTEXTUAL");
+ const title=esc(e.source_title||"Fonte"); const url=esc(e.source_url||"#");
+ return `<div class="evidence-item"><div class="evidence-main"><div class="evidence-badges"><span class="evidence-level ${badgeClass}">${badgeText}</span><span class="evidence-type ${evidenceTypeClass(e.evidence_type)}">${type}</span><span class="evidence-relevance">${relevance}</span></div><b>${esc(e.claim||"—")}</b><p>${esc(e.reason||"")}</p></div><a class="evidence-source" href="${url}" target="_blank" rel="noopener noreferrer">${title} ↗</a></div>`;
 }
 function evidenceList(records){return (records||[]).map(evidenceHtml).join("")||`<div class="evidence-empty">⚠️ Nenhuma afirmação recebeu vínculo automático a uma fonte específica. A pauta não deve ser publicada como plenamente confirmada; revise as fontes abaixo.</div>`;}
 function render(d){
@@ -60,10 +65,10 @@ function render(d){
    return;
  }
 $("#dashboard-empty").classList.add("hidden");$("#results").classList.remove("hidden");const c=Math.max(0,Math.min(100,Number(d.confidence)||0));const st=d.primary_status||d.status||"—";
+ const records=Array.isArray(d.evidence_records)?d.evidence_records:[]; const radar={facts:records.filter(e=>e.evidence_type==="FATO DOCUMENTADO"&&e.relevance==="DIRETA"&&e.level==="CONFIRMADO").length,statements:records.filter(e=>e.evidence_type==="DECLARAÇÃO").length,contextual:records.filter(e=>e.relevance!=="DIRETA").length,unproven:records.filter(e=>["ALEGAÇÃO","NÃO COMPROVADO"].includes(e.evidence_type)).length};
  const sources=sourceList(d.sources);
- const records=Array.isArray(d.evidence_records)?d.evidence_records:[]; const confirmedFacts=records.filter(r=>r.evidence_type==="FATO DOCUMENTADO"&&r.level==="CONFIRMADO").length; const statements=records.filter(r=>r.evidence_type==="DECLARAÇÃO").length; const unproven=records.filter(r=>r.level!=="CONFIRMADO"||["INTERPRETAÇÃO","ALEGAÇÃO","NÃO COMPROVADO"].includes(r.evidence_type)).length;
- const cards=`<div class="result-title"><div><h2>2. Resultados da Apuração</h2><p>Apuração em camadas: fatos, evidências, contexto e conflitos reais.</p></div><span class="pill">● Pauta analisada</span></div>
- <div class="cards"><article class="card mini">${mh("♢","Radar de Confiabilidade da Pauta")}<div class="confidence"><div class="donut" style="--p:${c}"><b>${c}%</b></div><div class="legend"><strong class="status-badge ${statusClass(st)}">${esc(st)}</strong><div><i class="dot green-dot"></i>Fatos documentados ${confirmedFacts}</div><div><i class="dot yellow-dot"></i>Declarações ${statements}</div><div><i class="dot red-dot"></i>Não comprovados ${unproven}</div><div><i class="dot red-dot"></i>Conflitos diretos ${d.conflicts?.length||0}</div></div></div><p><b>Síntese da apuração:</b> ${esc(d.primary_evidence||"—")}</p><p>${esc(d.summary)}</p></article>
+ const cards=`<div class="result-title"><div><h2>2. Resultados da Apuração</h2><p>Apuração em camadas: fato principal, evidências, contexto e conflitos reais.</p></div><span class="pill">● Pauta analisada</span></div>
+ <div class="cards"><article class="card mini">${mh("♢","Radar de Confiabilidade da Pauta")}<div class="confidence"><div class="donut" style="--p:${c}"><b>${c}%</b></div><div class="legend"><strong class="status-badge ${statusClass(st)}">${esc(st)}</strong><div><i class="dot green-dot"></i>Fatos documentados ${radar.facts}</div><div><i class="dot yellow-dot"></i>Declarações ${radar.statements}</div><div><i class="dot yellow-dot"></i>Contextuais/baixa relevância ${radar.contextual}</div><div><i class="dot red-dot"></i>Não comprovados ${radar.unproven}</div><div><i class="dot red-dot"></i>Conflitos diretos ${d.conflicts?.length||0}</div></div></div><p><b>Síntese da apuração:</b> ${esc(d.summary||d.primary_evidence||"—")}</p></article>
  <article class="card mini">${mh("✓","Evidências Diretas")}<ul>${list(d.direct_evidence)}</ul><div class="section-label">Qualidade das fontes</div><p>${esc(d.source_quality||"—")}</p></article>
  <article class="card mini">${mh("▥","Dados Importantes")}<div class="data-line">◉ <div><span>Headline</span><b>${esc(d.headline||"—")}</b></div></div><div class="data-line">◉ <div><span>Data do fato</span><b>${esc(d.event_date||"Não identificada")}</b></div></div><div class="data-line">◉ <div><span>Horário local</span><b>${esc(d.event_time||"Não identificado")}</b></div></div><div class="data-line">◉ <div><span>Local</span><b>${esc(d.event_location||"Não identificado")}</b></div></div><div class="data-line">◉ <div><span>Status editorial</span><b>${esc(st)}</b></div></div><div class="data-line">◉ <div><span>Confiança</span><b>${c}%</b></div></div></article></div>
  <article class="card evidence-card">${mh("⌁","Rastreamento da Evidência")}<p class="muted">Cada afirmação abaixo precisa apontar para a fonte que realmente a sustenta. O tipo da evidência importa: uma declaração ou interpretação não equivale a um fato documentado.</p><div class="evidence-list">${evidenceList(d.evidence_records)}</div></article>

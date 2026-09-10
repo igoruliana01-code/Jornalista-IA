@@ -88,6 +88,10 @@ REGRAS DE EVIDÊNCIA E TEMPO:
 - evidence_type é obrigatório: FATO DOCUMENTADO = documento/registro/ato oficial ou fato objetivamente verificável; DECLARAÇÃO = alguém afirmou/negou algo; INTERPRETAÇÃO = análise ou inferência; ALEGAÇÃO = acusação/afirmação não comprovada; NÃO COMPROVADO = não há sustentação suficiente.
 - relevance é obrigatória: DIRETA responde diretamente à pergunta central; CONTEXTUAL ajuda a explicar o cenário; FRACA tem relação distante.
 - Uma DECLARAÇÃO nunca prova, sozinha, que o conteúdo declarado é verdadeiro. Uma INTERPRETAÇÃO nunca deve entrar como FATO DOCUMENTADO. A presença de uma pessoa, empresa ou entidade em um contexto também não prova influência, controle ou causalidade.
+- No rastreamento visual, DECLARAÇÃO deve aparecer como “REGISTRADA”, nunca como “CONFIRMADO”. O que pode ser confirmado é que a declaração foi feita/publicada, não que seu conteúdo seja verdadeiro.
+- Só FATO DOCUMENTADO + DIRETA deve alimentar “Evidências Diretas”. Fatos CONTEXTUAIS ou FRACOS ficam no contexto e não devem ser apresentados como resposta direta à tese.
+- No “Melhor Ângulo Jornalístico”, não transforme hipóteses em fatos. Prefira “examinar”, “investigar”, “mapear”, “avaliar” e “possíveis conflitos” quando a relação causal ainda não estiver comprovada.
+- Priorize fontes primárias oficiais. Um portal especializado que apenas cita ou republica uma fonte oficial continua sendo imprensa secundária, não fonte primária.
 - Para pautas amplas, somente FATO DOCUMENTADO + relevância DIRETA pode elevar a confiança da resposta central. DECLARAÇÕES e INTERPRETAÇÕES devem ser tratadas como vozes/contexto.
 
 TESTE DE SANIDADE:
@@ -300,13 +304,20 @@ async function generateWithRetry({contents,config={}}){
 function hostOf(url=""){
   try{return new URL(url).hostname.replace(/^www\./,"").toLowerCase();}catch{return "";}
 }
+function hostMatches(host, domain){
+  const h=String(host||"").toLowerCase().replace(/^www\./,"");
+  const d=String(domain||"").toLowerCase().replace(/^www\./,"");
+  return h===d || h.endsWith("."+d);
+}
 function classifyTier(url="", source=""){
-  const h=hostOf(url); const text=(h+" "+String(source||"")).toLowerCase();
-  const aggregator=/^(news\.google\.com|www\.google\.com|google\.com)$/i.test(h);
-  const official=["conmebol.com","cbf.com.br","fifa.com","uefa.com","nba.com","nfl.com","mlb.com","olympics.com","gov.br","planalto.gov.br","stf.jus.br","camara.leg.br","senado.leg.br","ibge.gov.br","anatel.gov.br","apple.com","microsoft.com"];
-  const tier2=["ge.globo.com","uol.com.br","espn.com.br","terra.com.br","g1.globo.com","folha.uol.com.br","estadao.com.br","cnnbrasil.com.br","gazetaesportiva.com","placar.com.br","lance.com.br","oglobo.globo.com","reuters.com","apnews.com","bbc.com"];
-  if(!aggregator && official.some(x=>text.includes(x))) return "TIER 1 · OFICIAL";
-  if(tier2.some(x=>text.includes(x))) return "TIER 2 · IMPRENSA";
+  const h=hostOf(url);
+  const text=String(source||"").toLowerCase();
+  const aggregator=/^(news\.google\.com|google\.com)$/i.test(h);
+  const tier1Domains=["gov.br","planalto.gov.br","stf.jus.br","stj.jus.br","tst.jus.br","trf1.jus.br","camara.leg.br","senado.leg.br","ibge.gov.br","anatel.gov.br","conmebol.com","cbf.com.br","fifa.com","uefa.com","nba.com","nfl.com","mlb.com","olympics.com"];
+  const tier2Domains=["ge.globo.com","uol.com.br","espn.com.br","terra.com.br","g1.globo.com","folha.uol.com.br","estadao.com.br","cnnbrasil.com.br","gazetaesportiva.com","placar.com.br","lance.com.br","oglobo.globo.com","reuters.com","apnews.com","bbc.com"];
+  if(!aggregator && tier1Domains.some(d=>hostMatches(h,d))) return "TIER 1 · FONTE PRIMÁRIA";
+  if(tier2Domains.some(d=>hostMatches(h,d))) return "TIER 2 · IMPRENSA CONSOLIDADA";
+  if(!aggregator && /agência brasil|agencia brasil/.test(text)) return "TIER 2 · IMPRENSA CONSOLIDADA";
   return "TIER 3 · ESPECIALIZADA";
 }
 function shortDate(value=""){
@@ -473,12 +484,12 @@ function basePrompt(body,research){
   const today=new Date().toISOString().slice(0,10); const format=body.format||"Notícia";
   return `${editorial}\n\nDATA ATUAL: ${today}\n\nPAUTA:\nTema: ${body.topic}\nÁrea: ${body.area||"Geral"}\nFormato: ${format}\nESTRATÉGIA DO FORMATO: ${formatProfile(format)}\nInformações/links fornecidos pelo usuário:\n${body.sources||"(nenhum)"}\n\n${formatResearch(research)}\n\nADAPTAÇÃO PARA PAUTAS AMPLAS/INVESTIGATIVAS:
 Se o tema for uma pergunta ampla, opinativa ou analítica (por exemplo, “quem realmente manda...”), NÃO trate a pergunta inteira como se fosse um fato único. Transforme-a em subquestões verificáveis. Para Reportagem, crie mentalmente de 3 a 6 afirmações verificáveis sobre pessoas/entidades, contratos, decisões, valores, poderes, cronologia e contradições. Use as fontes encontradas para confirmar ou refutar cada subquestão. A pauta pode continuar sendo relevante mesmo que a pergunta central não tenha uma resposta binária. O campo direct_evidence deve conter os fatos objetivos que ajudam a responder a pergunta, e evidence_records deve ligar cada fato a uma ou mais URLs reais.\n\nTAREFA:\n1. Extraia a afirmação principal em uma frase.\n2. Verifique primeiro essa afirmação usando os resultados externos acima.\n3. Separe direct_evidence, context_evidence e contradiction_evidence.\n4. Em direct_evidence, escreva frases completas e específicas: inclua nome próprio, equipe/entidade, ação, placar/número e data do fato quando pertinente. NUNCA substitua o nome por uma descrição genérica se o nome estiver nas fontes.\n5. Determine event_date, event_time e event_location a partir do acontecimento, não da data de publicação da matéria. Para jogos, use a data local em que a partida começou. Se a pauta for estrutural/analítica e não houver um único acontecimento, deixe esses campos vazios. JAMAIS copie a data do artigo como data do fato só porque ela aparece no resultado.\n6. Só use URLs que aparecem nos resultados externos ou nos links fornecidos pelo usuário.\n7. Não invente uma fonte porque ela parece provável.\n8. Monte sources com título, URL real, motivo e tier.\n9. Faça o teste de sanidade, especialmente para separar data do evento de data de publicação.\n10. Escolha primary_status e confidence com base apenas na pauta principal.\n11. Headline/dek/lead devem respeitar o status. Se não confirmado, use linguagem condicional.\n12. Se o evento já aconteceu, classifique como CONFIRMADO / ENCERRADO.
-13. Para cada item de direct_evidence, crie OBRIGATORIAMENTE um evidence_record correspondente. Não deixe evidence_records vazio se houver direct_evidence. Cada evidence_record DEVE conter source_urls com pelo menos 1 URL EXATA copiada do bloco RESULTADOS. Nunca use [] em source_urls para uma afirmação factual. Se não houver fonte suficiente, mantenha o record com level PARCIAL ou NÃO CONFIRMADO e use a fonte que motivou a informação, explicando a limitação.
-14. Se a pauta for ampla, não deixe direct_evidence vazio apenas porque a pergunta central não é binária: preencha-o com fatos verificáveis que ajudem a responder as subquestões.
-15. Nunca use uma URL que não esteja no bloco RESULTADOS.
-16. Não use a palavra “confirmado” apenas porque várias matérias repetem a mesma informação; avalie a qualidade e independência das fontes.
-17. Se duas fontes divergirem sobre uma data, placar, nome ou número, registre a divergência em contradiction_evidence e conflicts.\n18. Se houver divergência de fuso horário, não chame isso de conflito factual: use a data local do evento e, se necessário, explique a diferença de UTC no campo note.
-19. Em primary_evidence, escreva uma síntese editorial da apuração, não uma prova isolada. Não apresente interpretação como se fosse fato documentado.`;
+13. Para ângulos de pautas analíticas, descreva o objeto de investigação sem afirmar causalidade ou controle que ainda não estejam documentados.
+14. Para cada item de direct_evidence, crie OBRIGATORIAMENTE um evidence_record correspondente. Não deixe evidence_records vazio se houver direct_evidence. Cada evidence_record DEVE conter source_urls com pelo menos 1 URL EXATA copiada do bloco RESULTADOS. Nunca use [] em source_urls para uma afirmação factual. Se não houver fonte suficiente, mantenha o record com level PARCIAL ou NÃO CONFIRMADO e use a fonte que motivou a informação, explicando a limitação.
+15. Se a pauta for ampla, não deixe direct_evidence vazio apenas porque a pergunta central não é binária: preencha-o com fatos verificáveis que ajudem a responder as subquestões.
+16. Nunca use uma URL que não esteja no bloco RESULTADOS.
+17. Não use a palavra “confirmado” apenas porque várias matérias repetem a mesma informação; avalie a qualidade e independência das fontes.
+18. Se duas fontes divergirem sobre uma data, placar, nome ou número, registre a divergência em contradiction_evidence e conflicts.\n19. Se houver divergência de fuso horário, não chame isso de conflito factual: use a data local do evento e, se necessário, explique a diferença de UTC no campo note.`;
 }
 async function analyze(body){
   const research=await externalSearch(body);
@@ -560,7 +571,7 @@ app.post("/api/factcheck",async(req,res)=>{
   }catch(e){res.status(isTransientError(e)?503:500).json({error:isTransientError(e)?"O Gemini gratuito está temporariamente no limite.":(e.message||"Erro no fact-check.")});}
 });
 
-app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.6.6-evidence-audit",search:"external-rss-gdelt",gemini:"interactions-api"}));
+app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.6.8-source-quality-and-evidence-radar",search:"external-rss-gdelt",gemini:"interactions-api"}));
 app.get("/api/search-test",async(req,res)=>{try{const r=await externalSearch({topic:req.query.q||"notícias Brasil",area:"Geral",format:"Pesquisa"});res.json({ok:true,queries:r.queries,count:r.results.length,results:r.results.slice(0,8)});}catch(e){res.status(502).json({ok:false,error:e.message});}});
 app.use((req,res)=>req.method==="GET"?res.sendFile(path.join(__dirname,"index.html")):res.status(404).json({error:"Rota não encontrada."}));
 const PORT=process.env.PORT||3000;
