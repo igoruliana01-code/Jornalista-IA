@@ -170,8 +170,13 @@ function basePrompt(body){
   return `${editorial}\n\nDATA ATUAL: ${today}\n\nPAUTA:\nTema: ${body.topic}\nÁrea: ${body.area||"Geral"}\nFormato: ${body.format||"Notícia"}\nInformações/links fornecidos:\n${body.sources||"(nenhum)"}\n\nTAREFA:\n1. Extraia a afirmação principal em uma frase.\n2. Pesquise e verifique primeiro essa afirmação.\n3. Separe explicitamente direct_evidence, context_evidence e contradiction_evidence.\n4. Só coloque algo em contradiction_evidence se contradizer diretamente a afirmação principal.\n5. Monte sources com título, URL real, motivo e tier.\n6. Faça o teste de sanidade e registre os resultados em sanity_check.\n7. Escolha primary_status e confidence com base apenas na pauta principal.\n8. Headline/dek/lead são rascunhos e devem respeitar o status. Se não confirmado, use linguagem condicional.\n9. Não invente fontes ou URLs.\n10. Se o evento já aconteceu, classifique como CONFIRMADO / ENCERRADO e explique a atualização temporal necessária.`;
 }
 async function analyze(body){
-  const {response,model}=await generateWithRetry({contents:basePrompt(body),config:{responseFormat:{text:{mimeType:"application/json",schema}},temperature:0.1,thinkingConfig:{thinkingLevel:"low"}},search:true});
-  let data=JSON.parse(response.text);
+  const {response,model}=await generateWithRetry({contents:basePrompt(body),config:{responseMimeType:"application/json",responseSchema:schema,temperature:0.1},search:true});
+  let raw=response?.text || "";
+  let data;
+  try { data=JSON.parse(raw); } catch(parseError) {
+    const cleaned=raw.replace(/^```json\s*/i,"").replace(/\s*```$/i,"").trim();
+    data=JSON.parse(cleaned);
+  }
   data.sources=normalizeSources(data,response);
   data.note=(data.note||"")+` Motor: ${model}.`;
   data=enforceEditorialSafety(data,data.sources);
