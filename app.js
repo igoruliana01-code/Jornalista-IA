@@ -43,7 +43,7 @@ function evidenceHtml(e){
  const url=esc(e.source_url||"#");
  return `<div class="evidence-item"><div class="evidence-main"><span class="evidence-level ${evidenceLevelClass(level)}">${level}</span><b>${esc(e.claim||"—")}</b><p>${esc(e.reason||"")}</p></div><a class="evidence-source" href="${url}" target="_blank" rel="noopener noreferrer">${title} ↗</a></div>`;
 }
-function evidenceList(records){return (records||[]).map(evidenceHtml).join("")||`<div class="evidence-empty">⚠️ A IA não conseguiu vincular automaticamente as afirmações às fontes. Faça a revisão manual.</div>`;}
+function evidenceList(records){return (records||[]).map(evidenceHtml).join("")||`<div class="evidence-empty">⚠️ Nenhuma afirmação recebeu vínculo automático a uma fonte específica. A pauta não deve ser publicada como plenamente confirmada; revise as fontes abaixo.</div>`;}
 function render(d){
  briefing=d;
  if(d.partial){

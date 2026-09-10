@@ -18,7 +18,7 @@ const schema = {
     confirmed:{type:"array",items:{type:"string"}}, estimates:{type:"array",items:{type:"string"}},
     unconfirmed:{type:"array",items:{type:"string"}}, conflicts:{type:"array",items:{type:"string"}},
     direct_evidence:{type:"array",items:{type:"string"}}, context_evidence:{type:"array",items:{type:"string"}},
-    contradiction_evidence:{type:"array",items:{type:"string"}}, evidence_records:{type:"array",items:{type:"object",properties:{claim:{type:"string"},source_urls:{type:"array",items:{type:"string"}},level:{type:"string"},reason:{type:"string"}},required:["claim","source_urls","level","reason"]}}, source_quality:{type:"string"}, source_check:{type:"string"},
+    contradiction_evidence:{type:"array",items:{type:"string"}}, evidence_records:{type:"array",minItems:1,maxItems:20,items:{type:"object",properties:{claim:{type:"string"},source_urls:{type:"array",minItems:1,items:{type:"string"}},level:{type:"string"},reason:{type:"string"}},required:["claim","source_urls","level","reason"]}}, source_quality:{type:"string"}, source_check:{type:"string"},
     sanity_check:{type:"array",items:{type:"string"}},
     sources:{type:"array",items:{type:"object",properties:{title:{type:"string"},url:{type:"string"},why:{type:"string"},type:{type:"string"},tier:{type:"string"}},required:["title","url","why","type","tier"]}},
     hear:{type:"array",items:{type:"string"}}, questions:{type:"array",items:{type:"string"}}, check:{type:"array",items:{type:"string"}},
@@ -357,6 +357,33 @@ function normalizeEvidenceRecords(data,research){
   }
   return clean.slice(0,20);
 }
+function isBroadAnalyticalTopic(topic=""){
+  const t=String(topic||"").toLowerCase().trim();
+  return /\bquem\s+realmente\b|\bquem\s+manda\b|\bcomo\s+funciona\b|\bpor\s+que\b|\bporquê\b|\bqual\s+é\s+a\s+razão\b|\bqual\s+é\s+o\s+impacto\b|\bquem\s+controla\b|\bcomo\s+é\s+que\b/.test(t) || /\?\s*$/.test(t);
+}
+function enforceAnalyticalGuardrails(data,body){
+  const broad=isBroadAnalyticalTopic(body?.topic||"");
+  const linked=Array.isArray(data.evidence_records)&&data.evidence_records.length>0;
+  if(broad){
+    // Uma pergunta analítica ampla não é um fato binário. Não permitir que ela pareça 90-100% confirmada.
+    if(!linked || /CONFIRMADO/i.test(String(data.primary_status||data.status||""))){
+      data.primary_status="PARCIALMENTE CONFIRMADO";
+      data.status=data.primary_status;
+    }
+    data.confidence=Math.min(Number(data.confidence)||0,74);
+    // Não existe necessariamente uma única "data do fato" para uma pauta estrutural.
+    data.event_date=""; data.event_time=""; data.event_location="";
+  }
+  if(!linked){
+    data.confidence=Math.min(Number(data.confidence)||0,74);
+    if(/CONFIRMADO/i.test(String(data.primary_status||data.status||""))){
+      data.primary_status="PARCIALMENTE CONFIRMADO";
+      data.status=data.primary_status;
+    }
+    data.source_check=(data.source_check||"")+" Nenhuma afirmação recebeu vínculo automático a uma URL específica; a pauta não deve ser tratada como plenamente confirmada.";
+  }
+  return data;
+}
 function enforceSafety(data,research){
   data.sources=normalizeSources(data,research);
   data.evidence_records=normalizeEvidenceRecords(data,research);
@@ -388,11 +415,11 @@ function formatProfile(format="Notícia"){
 function basePrompt(body,research){
   const today=new Date().toISOString().slice(0,10); const format=body.format||"Notícia";
   return `${editorial}\n\nDATA ATUAL: ${today}\n\nPAUTA:\nTema: ${body.topic}\nÁrea: ${body.area||"Geral"}\nFormato: ${format}\nESTRATÉGIA DO FORMATO: ${formatProfile(format)}\nInformações/links fornecidos pelo usuário:\n${body.sources||"(nenhum)"}\n\n${formatResearch(research)}\n\nADAPTAÇÃO PARA PAUTAS AMPLAS/INVESTIGATIVAS:
-Se o tema for uma pergunta ampla, opinativa ou analítica (por exemplo, “quem realmente manda...”), NÃO trate a pergunta inteira como se fosse um fato único. Transforme-a em subquestões verificáveis. Para Reportagem, crie mentalmente de 3 a 6 afirmações verificáveis sobre pessoas/entidades, contratos, decisões, valores, poderes, cronologia e contradições. Use as fontes encontradas para confirmar ou refutar cada subquestão. A pauta pode continuar sendo relevante mesmo que a pergunta central não tenha uma resposta binária. O campo direct_evidence deve conter os fatos objetivos que ajudam a responder a pergunta, e evidence_records deve ligar cada fato a uma ou mais URLs reais.\n\nTAREFA:\n1. Extraia a afirmação principal em uma frase.\n2. Verifique primeiro essa afirmação usando os resultados externos acima.\n3. Separe direct_evidence, context_evidence e contradiction_evidence.\n4. Em direct_evidence, escreva frases completas e específicas: inclua nome próprio, equipe/entidade, ação, placar/número e data do fato quando pertinente. NUNCA substitua o nome por uma descrição genérica se o nome estiver nas fontes.\n5. Determine event_date, event_time e event_location a partir do acontecimento, não da data de publicação da matéria. Para jogos, use a data local em que a partida começou.\n6. Só use URLs que aparecem nos resultados externos ou nos links fornecidos pelo usuário.\n7. Não invente uma fonte porque ela parece provável.\n8. Monte sources com título, URL real, motivo e tier.\n9. Faça o teste de sanidade, especialmente para separar data do evento de data de publicação.\n10. Escolha primary_status e confidence com base apenas na pauta principal.\n11. Headline/dek/lead devem respeitar o status. Se não confirmado, use linguagem condicional.\n12. Se o evento já aconteceu, classifique como CONFIRMADO / ENCERRADO.
-13. Para cada item factual importante, crie evidence_records com uma ou mais URLs exatas. O campo source_urls DEVE ser uma lista contendo as URLs que realmente sustentam a afirmação. Se não houver fonte suficiente, marque como PARCIAL ou NÃO CONFIRMADO.
+Se o tema for uma pergunta ampla, opinativa ou analítica (por exemplo, “quem realmente manda...”), NÃO trate a pergunta inteira como se fosse um fato único. Transforme-a em subquestões verificáveis. Para Reportagem, crie mentalmente de 3 a 6 afirmações verificáveis sobre pessoas/entidades, contratos, decisões, valores, poderes, cronologia e contradições. Use as fontes encontradas para confirmar ou refutar cada subquestão. A pauta pode continuar sendo relevante mesmo que a pergunta central não tenha uma resposta binária. O campo direct_evidence deve conter os fatos objetivos que ajudam a responder a pergunta, e evidence_records deve ligar cada fato a uma ou mais URLs reais.\n\nTAREFA:\n1. Extraia a afirmação principal em uma frase.\n2. Verifique primeiro essa afirmação usando os resultados externos acima.\n3. Separe direct_evidence, context_evidence e contradiction_evidence.\n4. Em direct_evidence, escreva frases completas e específicas: inclua nome próprio, equipe/entidade, ação, placar/número e data do fato quando pertinente. NUNCA substitua o nome por uma descrição genérica se o nome estiver nas fontes.\n5. Determine event_date, event_time e event_location a partir do acontecimento, não da data de publicação da matéria. Para jogos, use a data local em que a partida começou. Se a pauta for estrutural/analítica e não houver um único acontecimento, deixe esses campos vazios. JAMAIS copie a data do artigo como data do fato só porque ela aparece no resultado.\n6. Só use URLs que aparecem nos resultados externos ou nos links fornecidos pelo usuário.\n7. Não invente uma fonte porque ela parece provável.\n8. Monte sources com título, URL real, motivo e tier.\n9. Faça o teste de sanidade, especialmente para separar data do evento de data de publicação.\n10. Escolha primary_status e confidence com base apenas na pauta principal.\n11. Headline/dek/lead devem respeitar o status. Se não confirmado, use linguagem condicional.\n12. Se o evento já aconteceu, classifique como CONFIRMADO / ENCERRADO.
+13. Para cada item de direct_evidence, crie OBRIGATORIAMENTE um evidence_record correspondente. Não deixe evidence_records vazio se houver direct_evidence. Cada evidence_record DEVE conter source_urls com pelo menos 1 URL EXATA copiada do bloco RESULTADOS. Nunca use [] em source_urls para uma afirmação factual. Se não houver fonte suficiente, mantenha o record com level PARCIAL ou NÃO CONFIRMADO e use a fonte que motivou a informação, explicando a limitação.
 14. Se a pauta for ampla, não deixe direct_evidence vazio apenas porque a pergunta central não é binária: preencha-o com fatos verificáveis que ajudem a responder as subquestões.
-15. Nunca use uma URL que não esteja no bloco RESULTADOS.
-14. Não use a palavra “confirmado” apenas porque várias matérias repetem a mesma informação; avalie a qualidade e independência das fontes.
+16. Nunca use uma URL que não esteja no bloco RESULTADOS.
+17. Não use a palavra “confirmado” apenas porque várias matérias repetem a mesma informação; avalie a qualidade e independência das fontes.
 15. Se duas fontes divergirem sobre uma data, placar, nome ou número, registre a divergência em contradiction_evidence e conflicts.\n16. Se houver divergência de fuso horário, não chame isso de conflito factual: use a data local do evento e, se necessário, explique a diferença de UTC no campo note.`;
 }
 async function analyze(body){
@@ -407,7 +434,7 @@ async function analyze(body){
     const {response,model}=await generateWithRetry({contents:basePrompt(body,research),config:{responseMimeType:"application/json",responseSchema:schema,temperature:0.1}});
     let raw=response?.text||""; let data;
     try{data=JSON.parse(raw);}catch{data=JSON.parse(raw.replace(/^```json\s*/i,"").replace(/\s*```$/i,"").trim());}
-    data=enforceSafety(data,research); data.note=(data.note||"")+` Motor Gemini: ${model}.`;
+    data=enforceSafety(data,research); data=enforceAnalyticalGuardrails(data,body); data.note=(data.note||"")+` Motor Gemini: ${model}.`;
     return data;
   }catch(error){
     // A busca já foi concluída. Não escondemos as fontes só porque a IA falhou.
