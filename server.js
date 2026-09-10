@@ -76,7 +76,7 @@ TESTE DE SANIDADE:
 - Minha confiança reflete a pauta principal?`;
 
 function modelList(){
-  const primary=process.env.GEMINI_MODEL||"gemini-3.7-flash";
+  const primary=process.env.GEMINI_MODEL||"gemini-3.5-flash-lite";
   const configured=(process.env.GEMINI_FALLBACK_MODELS||"gemini-2.5-flash-lite").split(",").map(x=>x.trim()).filter(Boolean);
   return [...new Set([primary,...configured])];
 }
@@ -161,12 +161,27 @@ function errorKind(error){
   return "fatal";
 }
 function isTransientError(error){ return errorKind(error)!=="fatal"; }
-async function generateOnce(ai,model,contents,config,timeoutMs=38000){
-  const request=ai.models.generateContent({model,contents,config});
+async function generateOnce(ai,model,input,config={},timeoutMs=38000){
+  // V8.4: usa a API Interactions, que é a interface padrão atual do Gemini.
+  const {responseMimeType,responseSchema,...generationConfig}=config||{};
+  const requestConfig={model,input};
+  if(Object.keys(generationConfig).length) requestConfig.generation_config=generationConfig;
+  if(responseMimeType || responseSchema){
+    requestConfig.response_format={
+      type:"text",
+      mime_type:responseMimeType||"application/json",
+      ...(responseSchema?{schema:responseSchema}:{})
+    };
+  }
+  const request=ai.interactions.create(requestConfig);
   let timer;
   const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error(`Tempo limite excedido ao consultar o Gemini (${timeoutMs/1000}s).`),{status:504})),timeoutMs);});
-  try{return await Promise.race([request,timeout]);}
-  finally{clearTimeout(timer);}
+  try{
+    const interaction=await Promise.race([request,timeout]);
+    const text=interaction?.output_text||interaction?.outputs?.filter(x=>x?.type==="text").map(x=>x.text||"").join("\n")||"";
+    if(!text.trim()) throw Object.assign(new Error("O Gemini concluiu a interação, mas não retornou texto."),{status:502});
+    return {text,interaction};
+  }finally{clearTimeout(timer);}
 }
 async function generateWithRetry({contents,config={}}){
   if(!process.env.GEMINI_API_KEY) throw new Error("Chave GEMINI_API_KEY não configurada.");
@@ -177,9 +192,9 @@ async function generateWithRetry({contents,config={}}){
     const model=models[i];
     try{
       console.log(`GEMINI_REQUEST model=${model} attempt=${i+1}/${models.length}`);
-      const response=await generateOnce(ai,model,contents,config);
+      const result=await generateOnce(ai,model,contents,config);
       console.log(`GEMINI_OK model=${model}`);
-      return {response,model};
+      return {response:{text:result.text},model};
     }catch(error){
       lastError=error;
       const kind=errorKind(error);
@@ -317,8 +332,8 @@ app.post("/api/factcheck",async(req,res)=>{
   }catch(e){res.status(isTransientError(e)?503:500).json({error:isTransientError(e)?"O Gemini gratuito está temporariamente no limite.":(e.message||"Erro no fact-check.")});}
 });
 
-app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.3-revisada",search:"external-rss-gdelt",gemini:"no-grounding"}));
+app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.4-interactions",search:"external-rss-gdelt",gemini:"interactions-api"}));
 app.get("/api/search-test",async(req,res)=>{try{const r=await externalSearch({topic:req.query.q||"notícias Brasil",area:"Geral",format:"Pesquisa"});res.json({ok:true,queries:r.queries,count:r.results.length,results:r.results.slice(0,8)});}catch(e){res.status(502).json({ok:false,error:e.message});}});
 app.use((req,res)=>req.method==="GET"?res.sendFile(path.join(__dirname,"index.html")):res.status(404).json({error:"Rota não encontrada."}));
 const PORT=process.env.PORT||3000;
-app.listen(PORT,"0.0.0.0",()=>console.log(`Jornalista AI V8.3 revisada online na porta ${PORT}`));
+app.listen(PORT,"0.0.0.0",()=>console.log(`Jornalista AI V8.4 Interactions online na porta ${PORT}`));
