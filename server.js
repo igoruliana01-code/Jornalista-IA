@@ -344,11 +344,16 @@ function normalizeEvidenceRecords(data,research){
   const records=Array.isArray(data.evidence_records)?data.evidence_records:[];
   const clean=[];
   for(const e of records){
-    const url=String(e?.source_url||"").trim();
-    if(!e?.claim || !allowed.has(url)) continue;
-    const base=allowed.get(url);
+    const urls=Array.isArray(e?.source_urls)?e.source_urls.map(x=>String(x||"").trim()).filter(Boolean):[];
+    if(e?.source_url) urls.push(String(e.source_url).trim());
+    const validUrls=[...new Set(urls)].filter(u=>allowed.has(u));
+    if(!e?.claim || !validUrls.length) continue;
     const level=/^CONFIRMADO$/i.test(String(e.level||""))?"CONFIRMADO":/^PARCIAL/i.test(String(e.level||""))?"PARCIAL":"NÃO CONFIRMADO";
-    clean.push({claim:cleanSourceText(e.claim).slice(0,320),level,source_title:base.title||cleanSourceText(e.source_title||"Fonte"),source_url:url,reason:cleanSourceText(e.reason||"A fonte foi encontrada na busca externa e sustenta a afirmação.").slice(0,260)});
+    const sources=validUrls.slice(0,4).map(url=>{
+      const base=allowed.get(url);
+      return {source_title:base.title||cleanSourceText(e.source_title||"Fonte"),source_url:url};
+    });
+    clean.push({claim:cleanSourceText(e.claim).slice(0,320),level,source_title:sources.map(x=>x.source_title).join(" | "),source_url:sources[0].source_url,source_urls:sources.map(x=>x.source_url),reason:cleanSourceText(e.reason||"A fonte foi encontrada na busca externa e sustenta a afirmação.").slice(0,260)});
   }
   return clean.slice(0,20);
 }
@@ -382,8 +387,11 @@ function formatProfile(format="Notícia"){
 }
 function basePrompt(body,research){
   const today=new Date().toISOString().slice(0,10); const format=body.format||"Notícia";
-  return `${editorial}\n\nDATA ATUAL: ${today}\n\nPAUTA:\nTema: ${body.topic}\nÁrea: ${body.area||"Geral"}\nFormato: ${format}\nESTRATÉGIA DO FORMATO: ${formatProfile(format)}\nInformações/links fornecidos pelo usuário:\n${body.sources||"(nenhum)"}\n\n${formatResearch(research)}\n\nTAREFA:\n1. Extraia a afirmação principal em uma frase.\n2. Verifique primeiro essa afirmação usando os resultados externos acima.\n3. Separe direct_evidence, context_evidence e contradiction_evidence.\n4. Em direct_evidence, escreva frases completas e específicas: inclua nome próprio, equipe/entidade, ação, placar/número e data do fato quando pertinente. NUNCA substitua o nome por uma descrição genérica se o nome estiver nas fontes.\n5. Determine event_date, event_time e event_location a partir do acontecimento, não da data de publicação da matéria. Para jogos, use a data local em que a partida começou.\n6. Só use URLs que aparecem nos resultados externos ou nos links fornecidos pelo usuário.\n7. Não invente uma fonte porque ela parece provável.\n8. Monte sources com título, URL real, motivo e tier.\n9. Faça o teste de sanidade, especialmente para separar data do evento de data de publicação.\n10. Escolha primary_status e confidence com base apenas na pauta principal.\n11. Headline/dek/lead devem respeitar o status. Se não confirmado, use linguagem condicional.\n12. Se o evento já aconteceu, classifique como CONFIRMADO / ENCERRADO.
-13. Para cada item factual importante, crie evidence_records com a fonte exata. Se não houver fonte suficiente, marque como PARCIAL ou NÃO CONFIRMADO.
+  return `${editorial}\n\nDATA ATUAL: ${today}\n\nPAUTA:\nTema: ${body.topic}\nÁrea: ${body.area||"Geral"}\nFormato: ${format}\nESTRATÉGIA DO FORMATO: ${formatProfile(format)}\nInformações/links fornecidos pelo usuário:\n${body.sources||"(nenhum)"}\n\n${formatResearch(research)}\n\nADAPTAÇÃO PARA PAUTAS AMPLAS/INVESTIGATIVAS:
+Se o tema for uma pergunta ampla, opinativa ou analítica (por exemplo, “quem realmente manda...”), NÃO trate a pergunta inteira como se fosse um fato único. Transforme-a em subquestões verificáveis. Para Reportagem, crie mentalmente de 3 a 6 afirmações verificáveis sobre pessoas/entidades, contratos, decisões, valores, poderes, cronologia e contradições. Use as fontes encontradas para confirmar ou refutar cada subquestão. A pauta pode continuar sendo relevante mesmo que a pergunta central não tenha uma resposta binária. O campo direct_evidence deve conter os fatos objetivos que ajudam a responder a pergunta, e evidence_records deve ligar cada fato a uma ou mais URLs reais.\n\nTAREFA:\n1. Extraia a afirmação principal em uma frase.\n2. Verifique primeiro essa afirmação usando os resultados externos acima.\n3. Separe direct_evidence, context_evidence e contradiction_evidence.\n4. Em direct_evidence, escreva frases completas e específicas: inclua nome próprio, equipe/entidade, ação, placar/número e data do fato quando pertinente. NUNCA substitua o nome por uma descrição genérica se o nome estiver nas fontes.\n5. Determine event_date, event_time e event_location a partir do acontecimento, não da data de publicação da matéria. Para jogos, use a data local em que a partida começou.\n6. Só use URLs que aparecem nos resultados externos ou nos links fornecidos pelo usuário.\n7. Não invente uma fonte porque ela parece provável.\n8. Monte sources com título, URL real, motivo e tier.\n9. Faça o teste de sanidade, especialmente para separar data do evento de data de publicação.\n10. Escolha primary_status e confidence com base apenas na pauta principal.\n11. Headline/dek/lead devem respeitar o status. Se não confirmado, use linguagem condicional.\n12. Se o evento já aconteceu, classifique como CONFIRMADO / ENCERRADO.
+13. Para cada item factual importante, crie evidence_records com uma ou mais URLs exatas. O campo source_urls DEVE ser uma lista contendo as URLs que realmente sustentam a afirmação. Se não houver fonte suficiente, marque como PARCIAL ou NÃO CONFIRMADO.
+14. Se a pauta for ampla, não deixe direct_evidence vazio apenas porque a pergunta central não é binária: preencha-o com fatos verificáveis que ajudem a responder as subquestões.
+15. Nunca use uma URL que não esteja no bloco RESULTADOS.
 14. Não use a palavra “confirmado” apenas porque várias matérias repetem a mesma informação; avalie a qualidade e independência das fontes.
 15. Se duas fontes divergirem sobre uma data, placar, nome ou número, registre a divergência em contradiction_evidence e conflicts.\n16. Se houver divergência de fuso horário, não chame isso de conflito factual: use a data local do evento e, se necessário, explique a diferença de UTC no campo note.`;
 }
@@ -467,7 +475,7 @@ app.post("/api/factcheck",async(req,res)=>{
   }catch(e){res.status(isTransientError(e)?503:500).json({error:isTransientError(e)?"O Gemini gratuito está temporariamente no limite.":(e.message||"Erro no fact-check.")});}
 });
 
-app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.6.2-recovery-search-rss-fix",search:"external-rss-gdelt",gemini:"interactions-api"}));
+app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.6.3-evidence-linking-investigative",search:"external-rss-gdelt",gemini:"interactions-api"}));
 app.get("/api/search-test",async(req,res)=>{try{const r=await externalSearch({topic:req.query.q||"notícias Brasil",area:"Geral",format:"Pesquisa"});res.json({ok:true,queries:r.queries,count:r.results.length,results:r.results.slice(0,8)});}catch(e){res.status(502).json({ok:false,error:e.message});}});
 app.use((req,res)=>req.method==="GET"?res.sendFile(path.join(__dirname,"index.html")):res.status(404).json({error:"Rota não encontrada."}));
 const PORT=process.env.PORT||3000;

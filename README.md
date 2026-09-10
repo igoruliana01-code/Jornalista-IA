@@ -42,3 +42,6 @@ A pesquisa externa retorna títulos, fontes, datas, URLs e snippets. O Jornalist
 - Ausência de resultados não é tratada como falsidade.
 - Se todas as camadas falharem, a interface mostra apuração inconclusiva em vez de erro genérico.
 - Timeout do cliente ampliado para 70s para acomodar a recuperação + análise Gemini.
+
+
+V8.6.3: corrige o vínculo de evidence_records (source_urls vs source_url) e melhora a decomposição de pautas amplas/investigativas em subquestões verificáveis.
