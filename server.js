@@ -143,35 +143,80 @@ async function searchGdelt(query){
   return (data.articles||[]).slice(0,10).map(x=>({title:x.title||x.domain,url:x.url,description:x.snippet||"",date:x.seendate||"",source:x.domain||"",provider:"GDELT",query})).filter(x=>x.url);
 }
 function cleanQuery(q){return String(q||"").replace(/["'`]/g," ").replace(/\s+/g," ").trim().slice(0,180);}
-function buildQueries(body){
+function buildQueries(body, mode="normal"){
   const topic=cleanQuery(body.topic); const year=new Date().getFullYear();
   const area=cleanQuery(body.area||""); const format=String(body.format||"Notícia");
-  const qs=[`${topic} ${year}`,`${topic} ${area} ${year}`.trim()];
-  if(/Reportagem/i.test(format)) qs.push(`${topic} contexto histórico causas consequências ${year}`);
-  else if(/Entrevista/i.test(format)) qs.push(`${topic} entrevista declaração fala ${year}`);
-  else if(/Perfil/i.test(format)) qs.push(`${topic} trajetória histórico ${year}`);
-  else if(/Coluna/i.test(format)) qs.push(`${topic} análise repercussão ${year}`);
-  if(/esport/i.test(area)||/futebol|basquete|nba|libertadores|champions|f1|futebol/i.test(topic)) qs.push(`${topic} calendário oficial ${year}`);
+  const qs=[];
+  if(mode==="broad") {
+    qs.push(topic);
+    if(area) qs.push(`${topic} ${area}`);
+    if(/Reportagem/i.test(format)) qs.push(`${topic} documentos contrato investigação`);
+    else if(/Entrevista/i.test(format)) qs.push(`${topic} entrevista declaração`);
+    else if(/Perfil/i.test(format)) qs.push(`${topic} trajetória histórico`);
+    else qs.push(`${topic} notícias`);
+  } else if(mode==="split") {
+    qs.push(`${topic} quem envolvidos valores documentos`);
+    qs.push(`${topic} acusações resposta oficial`);
+    qs.push(`${topic} histórico contexto decisão`);
+  } else {
+    qs.push(`${topic} ${year}`);
+    qs.push(`${topic} ${area} ${year}`.trim());
+    if(/Reportagem/i.test(format)) qs.push(`${topic} contexto histórico causas consequências ${year}`);
+    else if(/Entrevista/i.test(format)) qs.push(`${topic} entrevista declaração fala ${year}`);
+    else if(/Perfil/i.test(format)) qs.push(`${topic} trajetória histórico ${year}`);
+    else if(/Coluna/i.test(format)) qs.push(`${topic} análise repercussão ${year}`);
+    if(/esport/i.test(area)||/futebol|basquete|nba|libertadores|champions|f1/i.test(topic)) qs.push(`${topic} calendário oficial ${year}`);
+  }
   return [...new Set(qs.filter(Boolean))].slice(0,3);
 }
 function dedupeResults(items){
   const map=new Map();
   for(const x of items){
-    const key=(x.url||x.title).replace(/\/$/,"").toLowerCase();
+    const key=(x.url||x.title||Math.random()).replace(/\/$/,"").toLowerCase();
     if(!map.has(key)) map.set(key,x);
   }
-  return [...map.values()].slice(0,14);
+  return [...map.values()].slice(0,18);
 }
-async function externalSearch(body){
-  const queries=buildQueries(body).slice(0,2);
+async function runSearchQueries(queries){
   const jobs=[];
   for(const q of queries){
-    jobs.push(searchGoogleNews(q).catch(err=>{console.error(`SEARCH_GOOGLE_NEWS_ERROR ${err.message}`);return [];}));
-    jobs.push(searchGdelt(q).catch(err=>{console.error(`SEARCH_GDELT_ERROR ${err.message}`);return [];}));
+    jobs.push(searchGoogleNews(q).catch(err=>{console.error(`SEARCH_GOOGLE_NEWS_ERROR query=${q} ${err.message}`);return [];}));
+    jobs.push(searchGdelt(q).catch(err=>{console.error(`SEARCH_GDELT_ERROR query=${q} ${err.message}`);return [];}));
   }
-  const results=dedupeResults((await Promise.all(jobs)).flat());
-  console.log(`EXTERNAL_SEARCH results=${results.length} queries=${queries.length}`);
-  return {queries,results};
+  return dedupeResults((await Promise.all(jobs)).flat());
+}
+async function externalSearch(body){
+  // Camadas de recuperação: uma consulta rígida pode falhar mesmo quando há cobertura.
+  // GDELT aceita consultas booleanas/por termos e oferece resultados em ArticleList;
+  // aqui usamos buscas progressivamente mais amplas para reduzir falsos vazios.
+  const attempted=[];
+  let queries=buildQueries(body,"normal").slice(0,2);
+  let results=await runSearchQueries(queries);
+  attempted.push(...queries);
+  console.log(`EXTERNAL_SEARCH stage=normal results=${results.length} queries=${queries.length}`);
+
+  if(results.length<3){
+    const broad=buildQueries(body,"broad");
+    const extra=broad.filter(q=>!attempted.includes(q)).slice(0,3);
+    if(extra.length){
+      const r2=await runSearchQueries(extra);
+      results=dedupeResults([...results,...r2]);
+      attempted.push(...extra);
+      console.log(`EXTERNAL_SEARCH stage=broad results=${results.length} queries=${extra.length}`);
+    }
+  }
+
+  if(results.length<3 && /Reportagem|Entrevista|Investig/i.test(String(body.format||""))){
+    const split=buildQueries(body,"split").filter(q=>!attempted.includes(q)).slice(0,3);
+    if(split.length){
+      const r3=await runSearchQueries(split);
+      results=dedupeResults([...results,...r3]);
+      attempted.push(...split);
+      console.log(`EXTERNAL_SEARCH stage=split results=${results.length} queries=${split.length}`);
+    }
+  }
+
+  return {queries:attempted,results,search_stages:results.length?"normal+broad+recovery":"all-recovery-attempts"};
 }
 function formatResearch(research){
   if(!research.results.length) return `BUSCA EXTERNA: nenhum resultado retornado. Isso NÃO é prova de que a pauta seja falsa.`;
@@ -344,7 +389,10 @@ function basePrompt(body,research){
 async function analyze(body){
   const research=await externalSearch(body);
   if(!research.results.length){
-    throw new Error("A busca externa não retornou fontes. Tente novamente com termos mais específicos.");
+    const e=new Error("A busca externa não encontrou fontes após as tentativas automáticas de recuperação. Isso não significa que a pauta seja falsa.");
+    e.code="SEARCH_EMPTY";
+    e.research=research;
+    throw e;
   }
   try{
     const {response,model}=await generateWithRetry({contents:basePrompt(body,research),config:{responseMimeType:"application/json",responseSchema:schema,temperature:0.1}});
@@ -366,6 +414,20 @@ app.post("/api/analyze",async(req,res)=>{
   try{if(!req.body.topic?.trim())return res.status(400).json({error:"Informe a pauta."});res.json(await analyze(req.body));}
   catch(e){
     console.error("ANALYZE_ERROR",e);
+    if(e.code==="SEARCH_EMPTY" && e.research){
+      return res.status(200).json({
+        partial:true, search_empty:true, status:"BUSCA INCONCLUSIVA", primary_status:"BUSCA INCONCLUSIVA", confidence:0,
+        event_date:"",event_time:"",event_location:"", primary_evidence:"Nenhuma fonte verificável foi encontrada após múltiplas estratégias de busca.",
+        summary:"A busca principal foi ampliada automaticamente, mas não retornou fontes suficientes. Isso não prova que a pauta seja falsa.",
+        confirmed:[],estimates:[],unconfirmed:[],conflicts:[],direct_evidence:[],evidence_records:[],context_evidence:[],contradiction_evidence:[],
+        source_quality:"Nenhuma fonte retornada após as tentativas de recuperação.",
+        source_check:"Foram tentadas consultas normais, amplas e, quando aplicável, consultas divididas por subtema.",
+        sanity_check:["A busca principal não retornou fontes.","O sistema ampliou e reformulou automaticamente as consultas.","Ausência de resultado não foi tratada como prova de falsidade."],
+        sources:[],hear:[],questions:[],check:["Reformular a pauta com nomes próprios, instituições, competição, empresa ou documento específico.","Se houver um link ou documento inicial, cole-o no campo de pistas."],
+        angle:"A pauta ainda não tem material verificável suficiente para definir um ângulo.",structure:[],headline:"Apuração inconclusiva",dek:"A busca automática não encontrou fontes suficientes.",lead:"A pesquisa precisa de mais elementos para avançar com segurança.",risks:["Não publicar a pauta como confirmada sem fontes."],
+        note:`Foram tentadas ${e.research.queries?.length||0} consultas em camadas. Nenhuma fonte foi retornada.`
+      });
+    }
     if(e.code==="AI_UNAVAILABLE" && e.research){
       return res.status(200).json({
         partial:true,
@@ -404,7 +466,7 @@ app.post("/api/factcheck",async(req,res)=>{
   }catch(e){res.status(isTransientError(e)?503:500).json({error:isTransientError(e)?"O Gemini gratuito está temporariamente no limite.":(e.message||"Erro no fact-check.")});}
 });
 
-app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.6-verifiable-research",search:"external-rss-gdelt",gemini:"interactions-api"}));
+app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.6.1-recovery-search",search:"external-rss-gdelt",gemini:"interactions-api"}));
 app.get("/api/search-test",async(req,res)=>{try{const r=await externalSearch({topic:req.query.q||"notícias Brasil",area:"Geral",format:"Pesquisa"});res.json({ok:true,queries:r.queries,count:r.results.length,results:r.results.slice(0,8)});}catch(e){res.status(502).json({ok:false,error:e.message});}});
 app.use((req,res)=>req.method==="GET"?res.sendFile(path.join(__dirname,"index.html")):res.status(404).json({error:"Rota não encontrada."}));
 const PORT=process.env.PORT||3000;

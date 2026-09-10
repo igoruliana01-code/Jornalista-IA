@@ -27,10 +27,18 @@ A variável `GEMINI_API_KEY` continua sendo a mesma. `GEMINI_MODEL` passa a usar
 A pesquisa externa retorna títulos, fontes, datas, URLs e snippets. O Jornalista AI não deve inventar conteúdo que não apareceu na pesquisa. Para publicação profissional, o jornalista deve abrir as fontes e conferir o conteúdo original.
 
 
-## V8.5
+## V8.6.1
 - Formatos editoriais com estratégia própria.
 - Evidências exigem nomes próprios e fatos específicos quando disponíveis.
 - Data do fato separada da data de publicação.
 - Fontes Google News não são mais classificadas automaticamente como TIER 1.
 - Sanitização reforçada de HTML/URLs nos cards.
 - Layout dos cards empilhado em telas estreitas.
+
+
+### V8.6.1 — Recuperação automática de busca
+- Busca em camadas: normal → ampla → dividida por subtemas quando o formato exige aprofundamento.
+- Google News RSS + GDELT são consultados em paralelo por camada.
+- Ausência de resultados não é tratada como falsidade.
+- Se todas as camadas falharem, a interface mostra apuração inconclusiva em vez de erro genérico.
+- Timeout do cliente ampliado para 70s para acomodar a recuperação + análise Gemini.

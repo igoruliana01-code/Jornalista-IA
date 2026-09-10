@@ -67,3 +67,7 @@ html,body{width:100%;max-width:100%;overflow-x:hidden}
 
 /* V8.6 — apuração verificável */
 .evidence-card{margin-top:16px}.evidence-list{display:grid;gap:10px}.evidence-item{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);min-width:0}.evidence-main{min-width:0}.evidence-main>b{display:block;line-height:1.45}.evidence-main p{margin:6px 0 0;color:#9ca8ba;font-size:12px;line-height:1.45}.evidence-level{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.04em;border-radius:999px;padding:4px 7px;margin-bottom:7px}.evidence-level.ok{background:rgba(52,211,153,.12);color:#5ee7b2}.evidence-level.warn{background:rgba(250,204,21,.12);color:#f6d75a}.evidence-level.danger{background:rgba(248,113,113,.12);color:#ff8d8d}.evidence-source{flex:0 0 auto;max-width:230px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#8bb8ff;text-decoration:none;font-size:12px;font-weight:700}.evidence-empty{padding:12px;border-radius:10px;background:rgba(250,204,21,.07);color:#d8c56a;font-size:13px;line-height:1.45}@media(max-width:720px){.evidence-item{display:block}.evidence-source{display:block;max-width:100%;margin-top:10px}.evidence-card{margin-top:12px}}
+
+/* V8.6.1 — recuperação de busca */
+.error-card .quota-note{margin-top:14px}
+.error-card ul{margin:8px 0 0;padding-left:20px}
