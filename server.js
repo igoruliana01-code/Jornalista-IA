@@ -18,7 +18,7 @@ const schema = {
     confirmed:{type:"array",items:{type:"string"}}, estimates:{type:"array",items:{type:"string"}},
     unconfirmed:{type:"array",items:{type:"string"}}, conflicts:{type:"array",items:{type:"string"}},
     direct_evidence:{type:"array",items:{type:"string"}}, context_evidence:{type:"array",items:{type:"string"}},
-    contradiction_evidence:{type:"array",items:{type:"string"}}, evidence_records:{type:"array",minItems:1,maxItems:20,items:{type:"object",properties:{claim:{type:"string"},source_urls:{type:"array",minItems:1,items:{type:"string"}},level:{type:"string"},evidence_type:{type:"string",enum:["FATO DOCUMENTADO","DECLARAÇÃO","INTERPRETAÇÃO","ALEGAÇÃO","NÃO COMPROVADO"]},relevance:{type:"string",enum:["DIRETA","CONTEXTUAL","FRACA"]},reason:{type:"string"}},required:["claim","source_urls","level","evidence_type","relevance","reason"]}}, source_quality:{type:"string"}, source_check:{type:"string"},
+    contradiction_evidence:{type:"array",items:{type:"string"}}, evidence_records:{type:"array",minItems:0,maxItems:20,items:{type:"object",properties:{claim:{type:"string"},source_urls:{type:"array",minItems:0,items:{type:"string"}},level:{type:"string"},evidence_type:{type:"string",enum:["FATO DOCUMENTADO","DECLARAÇÃO","INTERPRETAÇÃO","ALEGAÇÃO","NÃO COMPROVADO"]},relevance:{type:"string",enum:["DIRETA","CONTEXTUAL","FRACA"]},reason:{type:"string"}},required:["claim","source_urls","level","evidence_type","relevance","reason"]}}, source_quality:{type:"string"}, source_check:{type:"string"},
     sanity_check:{type:"array",items:{type:"string"}},
     sources:{type:"array",items:{type:"object",properties:{title:{type:"string"},url:{type:"string"},why:{type:"string"},type:{type:"string"},tier:{type:"string"}},required:["title","url","why","type","tier"]}},
     hear:{type:"array",items:{type:"string"}}, questions:{type:"array",items:{type:"string"}}, check:{type:"array",items:{type:"string"}},
@@ -311,13 +311,15 @@ function hostMatches(host, domain){
 }
 function classifyTier(url="", source=""){
   const h=hostOf(url);
-  const text=String(source||"").toLowerCase();
+  const text=String(source||"").toLowerCase().trim();
   const aggregator=/^(news\.google\.com|google\.com)$/i.test(h);
   const tier1Domains=["gov.br","planalto.gov.br","stf.jus.br","stj.jus.br","tst.jus.br","trf1.jus.br","camara.leg.br","senado.leg.br","ibge.gov.br","anatel.gov.br","conmebol.com","cbf.com.br","fifa.com","uefa.com","nba.com","nfl.com","mlb.com","olympics.com"];
   const tier2Domains=["ge.globo.com","uol.com.br","espn.com.br","terra.com.br","g1.globo.com","folha.uol.com.br","estadao.com.br","cnnbrasil.com.br","gazetaesportiva.com","placar.com.br","lance.com.br","oglobo.globo.com","reuters.com","apnews.com","bbc.com"];
-  if(!aggregator && tier1Domains.some(d=>hostMatches(h,d))) return "TIER 1 · FONTE PRIMÁRIA";
-  if(tier2Domains.some(d=>hostMatches(h,d))) return "TIER 2 · IMPRENSA CONSOLIDADA";
-  if(!aggregator && /agência brasil|agencia brasil/.test(text)) return "TIER 2 · IMPRENSA CONSOLIDADA";
+  const tier1Names=["cade","conselho administrativo de defesa econômica","cbf","confederação brasileira de futebol","stf","stj","tribunal de justiça","câmara dos deputados","senado federal","fifa","conmebol","nba"];
+  const tier2Names=["uol","espn","g1","globo esporte","bbc","reuters","associated press","ap news","folha","estadao","estadão","cnn brasil","lance","gazeta esportiva","terra","o globo"];
+  if(tier1Domains.some(d=>hostMatches(h,d)) || tier1Names.some(n=>text===n || text.includes(n))) return "TIER 1 · FONTE PRIMÁRIA";
+  if(tier2Domains.some(d=>hostMatches(h,d)) || tier2Names.some(n=>text===n || text.includes(n))) return "TIER 2 · IMPRENSA CONSOLIDADA";
+  if(/agência brasil|agencia brasil/.test(text)) return "TIER 2 · IMPRENSA CONSOLIDADA";
   return "TIER 3 · ESPECIALIZADA";
 }
 function shortDate(value=""){
@@ -341,7 +343,7 @@ function sourceCardData(r, why=""){
   const url=r.url||""; const host=hostOf(url); const publisher=cleanSourceText(r.source||"");
   const display=publisher||host||r.provider||"Fonte";
   const cleanWhy=cleanSourceText(why||r.description||"");
-  return {title:r.title||"Fonte sem título",url,why:cleanWhy.slice(0,220),type:"web",tier:classifyTier(url,`${r.source||""} ${r.title||""}`),provider:r.provider||"Busca externa",domain:display,date:shortDate(r.date)};
+  return {title:r.title||"Fonte sem título",url,why:cleanWhy.slice(0,220),type:"web",tier:classifyTier(url,r.source||""),provider:r.provider||"Busca externa",domain:display,date:shortDate(r.date)};
 }
 function normalizeSources(data,research){
   const external=research.results.map(r=>sourceCardData(r,`Resultado encontrado na pesquisa externa. ${cleanSourceText(r.description||"")}`.trim()));
@@ -351,7 +353,7 @@ function normalizeSources(data,research){
   for(const s of generated){
     if(s?.url && allowed.has(s.url)){
       const base=allowed.get(s.url);
-      final.push({...base,why:cleanSourceText(s.why||base.why).slice(0,320),tier:classifyTier(base.url,`${s.tier||""} ${base.domain||""}`)});
+      final.push({...base,why:cleanSourceText(s.why||base.why).slice(0,320),tier:classifyTier(base.url,base.domain||"")});
     }
   }
   for(const s of external) if(!final.some(x=>x.url===s.url)) final.push(s);
@@ -398,7 +400,7 @@ function applyEvidenceSemantics(data, body, research){
   const broad=isBroadAnalyticalTopic(body?.topic||"");
   const sourceUrls=[...new Set(directFacts.flatMap(r=>r.source_urls||[r.source_url]).filter(Boolean))];
   const sourceTiers=sourceUrls.map(url=>classifyTier(url,"")).filter(Boolean);
-  const hasPrimary=sourceTiers.includes("TIER 1 · OFICIAL");
+  const hasPrimary=sourceTiers.includes("TIER 1 · FONTE PRIMÁRIA");
   // Declarações, interpretações e alegações nunca contam como prova objetiva da tese central.
   if(records.length && directFacts.length===0){
     data.confidence=Math.min(Number(data.confidence)||0,59);
@@ -456,7 +458,8 @@ function enforceSafety(data,research){
   data.sources=normalizeSources(data,research);
   data.evidence_records=normalizeEvidenceRecords(data,research);
   if(!data.evidence_records.length && (data.direct_evidence||[]).length){
-    data.source_check=(data.source_check||"")+" Nenhum vínculo automático entre evidência e fonte foi retornado; revise manualmente antes de publicar.";
+    data.direct_evidence=[];
+    data.source_check=(data.source_check||"")+" Nenhuma evidência direta recebeu vínculo com uma URL exata encontrada. Os resultados permanecem como fontes para revisão manual.";
   }
   data.primary_status=classifyStatus(data); data.status=data.primary_status;
   data.confidence=Math.max(0,Math.min(100,Number(data.confidence)||0));
@@ -487,9 +490,13 @@ Se o tema for uma pergunta ampla, opinativa ou analítica (por exemplo, “quem 
 13. Para ângulos de pautas analíticas, descreva o objeto de investigação sem afirmar causalidade ou controle que ainda não estejam documentados.
 14. Para cada item de direct_evidence, crie OBRIGATORIAMENTE um evidence_record correspondente. Não deixe evidence_records vazio se houver direct_evidence. Cada evidence_record DEVE conter source_urls com pelo menos 1 URL EXATA copiada do bloco RESULTADOS. Nunca use [] em source_urls para uma afirmação factual. Se não houver fonte suficiente, mantenha o record com level PARCIAL ou NÃO CONFIRMADO e use a fonte que motivou a informação, explicando a limitação.
 15. Se a pauta for ampla, não deixe direct_evidence vazio apenas porque a pergunta central não é binária: preencha-o com fatos verificáveis que ajudem a responder as subquestões.
-16. Nunca use uma URL que não esteja no bloco RESULTADOS.
-17. Não use a palavra “confirmado” apenas porque várias matérias repetem a mesma informação; avalie a qualidade e independência das fontes.
-18. Se duas fontes divergirem sobre uma data, placar, nome ou número, registre a divergência em contradiction_evidence e conflicts.\n19. Se houver divergência de fuso horário, não chame isso de conflito factual: use a data local do evento e, se necessário, explique a diferença de UTC no campo note.`;
+16. Se não for possível vincular um fato a uma URL EXATA dos resultados, NÃO coloque esse fato em direct_evidence. Nesse caso, deixe direct_evidence vazio e registre a limitação em source_check.
+17. A frase “X afirmou Y” é uma DECLARAÇÃO REGISTRADA: o fato de X ter dito Y pode ser documentado, mas Y não se torna verdadeiro por causa da declaração.
+18. Não coloque avaliações como “fontes de referência”, “boa cobertura” ou “qualidade das fontes” dentro de direct_evidence; isso pertence a source_quality/source_check.
+19. Nunca use uma URL que não esteja no bloco RESULTADOS.
+20. Não use a palavra “confirmado” apenas porque várias matérias repetem a mesma informação; avalie a qualidade e independência das fontes.
+21. Se duas fontes divergirem sobre uma data, placar, nome ou número, registre a divergência em contradiction_evidence e conflicts.
+22. Se houver divergência de fuso horário, não chame isso de conflito factual: use a data local do evento e, se necessário, explique a diferença de UTC no campo note.`;
 }
 async function analyze(body){
   const research=await externalSearch(body);
@@ -571,8 +578,8 @@ app.post("/api/factcheck",async(req,res)=>{
   }catch(e){res.status(isTransientError(e)?503:500).json({error:isTransientError(e)?"O Gemini gratuito está temporariamente no limite.":(e.message||"Erro no fact-check.")});}
 });
 
-app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.6.8-source-quality-and-evidence-radar",search:"external-rss-gdelt",gemini:"interactions-api"}));
+app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.6.10-audited",search:"external-rss-gdelt",gemini:"interactions-api"}));
 app.get("/api/search-test",async(req,res)=>{try{const r=await externalSearch({topic:req.query.q||"notícias Brasil",area:"Geral",format:"Pesquisa"});res.json({ok:true,queries:r.queries,count:r.results.length,results:r.results.slice(0,8)});}catch(e){res.status(502).json({ok:false,error:e.message});}});
 app.use((req,res)=>req.method==="GET"?res.sendFile(path.join(__dirname,"index.html")):res.status(404).json({error:"Rota não encontrada."}));
 const PORT=process.env.PORT||3000;
-app.listen(PORT,"0.0.0.0",()=>console.log(`Jornalista AI V8.6 Apuração Verificável online na porta ${PORT}`));
+app.listen(PORT,"0.0.0.0",()=>console.log(`Jornalista AI V8.6.10 Auditada online na porta ${PORT}`));
