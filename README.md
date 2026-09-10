@@ -17,3 +17,7 @@ Versão com apuração em camadas:
 - GEMINI_FALLBACK_MODELS (opcional)
 
 O projeto usa Node + Express + @google/genai.
+
+
+## V7.1 — correção de compatibilidade
+Atualizada a configuração de saída JSON para o formato atual do SDK Google GenAI e reduzido o tempo de fallback.
