@@ -71,3 +71,5 @@ html,body{width:100%;max-width:100%;overflow-x:hidden}
 /* V8.6.1 — recuperação de busca */
 .error-card .quota-note{margin-top:14px}
 .error-card ul{margin:8px 0 0;padding-left:20px}
+
+.evidence-badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px}.evidence-type,.evidence-relevance{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.03em;border-radius:999px;padding:4px 7px}.evidence-type.fact{background:rgba(52,211,153,.12);color:#5ee7b2}.evidence-type.statement{background:rgba(96,165,250,.12);color:#8bb8ff}.evidence-type.interpretation{background:rgba(192,132,252,.12);color:#d3a5ff}.evidence-type.allegation{background:rgba(251,146,60,.12);color:#ffb46b}.evidence-type.unproven{background:rgba(248,113,113,.12);color:#ff8d8d}.evidence-relevance{background:rgba(255,255,255,.06);color:#aeb9c9}.evidence-item{min-width:0}.evidence-main{overflow-wrap:anywhere}
