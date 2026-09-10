@@ -18,7 +18,7 @@ const schema = {
     confirmed:{type:"array",items:{type:"string"}}, estimates:{type:"array",items:{type:"string"}},
     unconfirmed:{type:"array",items:{type:"string"}}, conflicts:{type:"array",items:{type:"string"}},
     direct_evidence:{type:"array",items:{type:"string"}}, context_evidence:{type:"array",items:{type:"string"}},
-    contradiction_evidence:{type:"array",items:{type:"string"}}, source_quality:{type:"string"}, source_check:{type:"string"},
+    contradiction_evidence:{type:"array",items:{type:"string"}}, evidence_records:{type:"array",items:{type:"object",properties:{claim:{type:"string"},source_urls:{type:"array",items:{type:"string"}},level:{type:"string"},reason:{type:"string"}},required:["claim","source_urls","level","reason"]}}, source_quality:{type:"string"}, source_check:{type:"string"},
     sanity_check:{type:"array",items:{type:"string"}},
     sources:{type:"array",items:{type:"object",properties:{title:{type:"string"},url:{type:"string"},why:{type:"string"},type:{type:"string"},tier:{type:"string"}},required:["title","url","why","type","tier"]}},
     hear:{type:"array",items:{type:"string"}}, questions:{type:"array",items:{type:"string"}}, check:{type:"array",items:{type:"string"}},
@@ -100,30 +100,35 @@ function modelList(){
   return [...new Set([primary,...configured])];
 }
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
-function decodeHtml(s=""){
+function decodeEntities(s=""){
   return String(s||"")
     .replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">")
     .replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&#x27;/gi,"'")
     .replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi,(_,n)=>String.fromCharCode(parseInt(n,16)))
+    .replace(/&#x([0-9a-f]+);/gi,(_,n)=>String.fromCharCode(parseInt(n,16)));
+}
+function decodeHtml(s=""){
+  return decodeEntities(s)
     .replace(/<script[\s\S]*?<\/script>/gi," ")
     .replace(/<style[\s\S]*?<\/style>/gi," ")
     .replace(/<[^>]*>/g," ")
-    .replace(/https?:\/\/[^\s<]+/gi," ")
-    .replace(/www\.[^\s<]+/gi," ")
     .replace(/\s+/g," ").trim();
 }
 function tag(block,name){
   const re=new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${name}>`,`i`);
   const m=block.match(re); return m?decodeHtml(m[1]):"";
 }
+function tagRaw(block,name){
+  const re=new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${name}>`,`i`);
+  const m=block.match(re); return m?decodeEntities(m[1]).replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim():"";
+}
 function rssItems(xml){
   return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].map(m=>{
     const b=m[1];
-    return {title:tag(b,"title"),url:tag(b,"link"),description:tag(b,"description"),date:tag(b,"pubDate"),source:tag(b,"source")};
+    return {title:tag(b,"title"),url:tagRaw(b,"link"),description:cleanSourceText(tagRaw(b,"description")),date:tag(b,"pubDate"),source:tag(b,"source")};
   }).filter(x=>x.title&&x.url);
 }
-async function fetchText(url, ms=5000){
+async function fetchText(url, ms=12000){
   const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),ms);
   try{
     const r=await fetch(url,{signal:controller.signal,headers:{"user-agent":"JornalistaAI/8.0 (news research)"}});
@@ -179,29 +184,25 @@ function dedupeResults(items){
 }
 async function runSearchQueries(queries){
   const jobs=[];
+  const errors=[];
   for(const q of queries){
-    jobs.push(searchGoogleNews(q).catch(err=>{console.error(`SEARCH_GOOGLE_NEWS_ERROR query=${q} ${err.message}`);return [];}));
-    jobs.push(searchGdelt(q).catch(err=>{console.error(`SEARCH_GDELT_ERROR query=${q} ${err.message}`);return [];}));
+    jobs.push(searchGoogleNews(q).catch(err=>{const msg=`Google News: ${err.message}`; errors.push({provider:"Google News",query:q,error:err.message}); console.error(`SEARCH_GOOGLE_NEWS_ERROR query=${q} ${err.message}`); return [];}));
+    jobs.push(searchGdelt(q).catch(err=>{const msg=`GDELT: ${err.message}`; errors.push({provider:"GDELT",query:q,error:err.message}); console.error(`SEARCH_GDELT_ERROR query=${q} ${err.message}`); return [];}));
   }
-  return dedupeResults((await Promise.all(jobs)).flat());
+  const results=dedupeResults((await Promise.all(jobs)).flat());
+  return {results,errors};
 }
 async function externalSearch(body){
-  // Camadas de recuperação: uma consulta rígida pode falhar mesmo quando há cobertura.
-  // GDELT aceita consultas booleanas/por termos e oferece resultados em ArticleList;
-  // aqui usamos buscas progressivamente mais amplas para reduzir falsos vazios.
-  const attempted=[];
+  const attempted=[]; const errors=[];
   let queries=buildQueries(body,"normal").slice(0,2);
-  let results=await runSearchQueries(queries);
-  attempted.push(...queries);
+  let pack=await runSearchQueries(queries); let results=pack.results; errors.push(...pack.errors); attempted.push(...queries);
   console.log(`EXTERNAL_SEARCH stage=normal results=${results.length} queries=${queries.length}`);
 
   if(results.length<3){
     const broad=buildQueries(body,"broad");
     const extra=broad.filter(q=>!attempted.includes(q)).slice(0,3);
     if(extra.length){
-      const r2=await runSearchQueries(extra);
-      results=dedupeResults([...results,...r2]);
-      attempted.push(...extra);
+      const r2=await runSearchQueries(extra); results=dedupeResults([...results,...r2.results]); errors.push(...r2.errors); attempted.push(...extra);
       console.log(`EXTERNAL_SEARCH stage=broad results=${results.length} queries=${extra.length}`);
     }
   }
@@ -209,17 +210,15 @@ async function externalSearch(body){
   if(results.length<3 && /Reportagem|Entrevista|Investig/i.test(String(body.format||""))){
     const split=buildQueries(body,"split").filter(q=>!attempted.includes(q)).slice(0,3);
     if(split.length){
-      const r3=await runSearchQueries(split);
-      results=dedupeResults([...results,...r3]);
-      attempted.push(...split);
+      const r3=await runSearchQueries(split); results=dedupeResults([...results,...r3.results]); errors.push(...r3.errors); attempted.push(...split);
       console.log(`EXTERNAL_SEARCH stage=split results=${results.length} queries=${split.length}`);
     }
   }
 
-  return {queries:attempted,results,search_stages:results.length?"normal+broad+recovery":"all-recovery-attempts"};
+  return {queries:attempted,results,errors,search_stages:results.length?"normal+broad+recovery":"all-recovery-attempts"};
 }
 function formatResearch(research){
-  if(!research.results.length) return `BUSCA EXTERNA: nenhum resultado retornado. Isso NÃO é prova de que a pauta seja falsa.`;
+  if(!research.results.length) return `BUSCA EXTERNA: nenhum resultado retornado. Isso NÃO é prova de que a pauta seja falsa. Erros técnicos registrados: ${research.errors?.length||0}.`;
   return `BUSCA EXTERNA REALIZADA PELO SERVIDOR\nConsultas: ${research.queries.join(" | ")}\n\nRESULTADOS (título, fonte, data, URL e resumo/snippet):\n`+
     research.results.map((r,i)=>`[${i+1}] ${r.title}\nFonte: ${r.source||r.provider}\nData: ${r.date||"não informada"}\nURL: ${r.url}\nResumo: ${r.description||"sem resumo"}`).join("\n\n");
 }
@@ -304,6 +303,8 @@ function cleanSourceText(value=""){
   let t=decodeHtml(String(value||""));
   t=t.replace(/target\s*=\s*["'][^"']*["']/gi," ")
     .replace(/href\s*=\s*["'][^"']*["']/gi," ")
+    .replace(/https?:\/\/[^\s<]+/gi," ")
+    .replace(/www\.[^\s<]+/gi," ")
     .replace(/Encontrada na busca externa\s*\([^)]*\)\.?/gi,"Resultado encontrado na pesquisa externa.")
     .replace(/Resultado encontrado por [^.]+\.?/gi,"Resultado encontrado na pesquisa externa.")
     .replace(/\s+/g," ").trim();
@@ -316,7 +317,7 @@ function sourceCardData(r, why=""){
   return {title:r.title||"Fonte sem título",url,why:cleanWhy.slice(0,220),type:"web",tier:classifyTier(url,`${r.source||""} ${r.title||""}`),provider:r.provider||"Busca externa",domain:display,date:shortDate(r.date)};
 }
 function normalizeSources(data,research){
-  const external=research.results.map(r=>sourceCardData(r,`Resultado encontrado na pesquisa externa. ${r.description||""}`.trim()));
+  const external=research.results.map(r=>sourceCardData(r,`Resultado encontrado na pesquisa externa. ${cleanSourceText(r.description||"")}`.trim()));
   const generated=Array.isArray(data.sources)?data.sources:[];
   const allowed=new Map(external.map(x=>[x.url,x]));
   const final=[];
@@ -425,7 +426,7 @@ app.post("/api/analyze",async(req,res)=>{
         sanity_check:["A busca principal não retornou fontes.","O sistema ampliou e reformulou automaticamente as consultas.","Ausência de resultado não foi tratada como prova de falsidade."],
         sources:[],hear:[],questions:[],check:["Reformular a pauta com nomes próprios, instituições, competição, empresa ou documento específico.","Se houver um link ou documento inicial, cole-o no campo de pistas."],
         angle:"A pauta ainda não tem material verificável suficiente para definir um ângulo.",structure:[],headline:"Apuração inconclusiva",dek:"A busca automática não encontrou fontes suficientes.",lead:"A pesquisa precisa de mais elementos para avançar com segurança.",risks:["Não publicar a pauta como confirmada sem fontes."],
-        note:`Foram tentadas ${e.research.queries?.length||0} consultas em camadas. Nenhuma fonte foi retornada.`
+        note:`Foram tentadas ${e.research.queries?.length||0} consultas em camadas. Nenhuma fonte foi retornada. Falhas registradas: ${e.research.errors?.length||0}.`
       });
     }
     if(e.code==="AI_UNAVAILABLE" && e.research){
@@ -438,7 +439,7 @@ app.post("/api/analyze",async(req,res)=>{
         primary_evidence:"A pesquisa externa foi concluída, mas o Gemini não conseguiu analisar os resultados dentro do limite de tempo/cota.",
         summary:"As fontes abaixo foram encontradas, porém a análise automática não foi concluída. Revise as fontes antes de publicar.",
         confirmed:[],estimates:[],unconfirmed:[],conflicts:[],direct_evidence:[],evidence_records:[],context_evidence:[],contradiction_evidence:[],source_quality:"Pesquisa externa disponível; análise da IA pendente.",source_check:"As fontes foram obtidas externamente e não devem ser tratadas como confirmação automática.",sanity_check:["A busca externa funcionou.","A análise do Gemini não foi concluída.","A decisão editorial continua pendente de revisão humana."],
-        sources:e.research.results.slice(0,8).map(r=>sourceCardData(r,`Resultado encontrado na pesquisa externa. ${r.description||""}`.trim())),
+        sources:e.research.results.slice(0,8).map(r=>sourceCardData(r,`Resultado encontrado na pesquisa externa. ${cleanSourceText(r.description||"")}`.trim())),
         hear:[],questions:[],check:["Revisar as fontes encontradas."],angle:"Aguardando análise do Gemini.",structure:[],headline:"Análise automática indisponível",dek:"As fontes foram encontradas, mas precisam de revisão.",lead:"A pesquisa externa encontrou fontes relacionadas à pauta.",risks:["Não publicar como confirmado sem revisar as fontes."],note:`Busca externa: ${e.research.results.length} resultados. Motivo da falha da IA: ${e.message}`
       });
     }
@@ -466,7 +467,7 @@ app.post("/api/factcheck",async(req,res)=>{
   }catch(e){res.status(isTransientError(e)?503:500).json({error:isTransientError(e)?"O Gemini gratuito está temporariamente no limite.":(e.message||"Erro no fact-check.")});}
 });
 
-app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.6.1-recovery-search",search:"external-rss-gdelt",gemini:"interactions-api"}));
+app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.6.2-recovery-search-rss-fix",search:"external-rss-gdelt",gemini:"interactions-api"}));
 app.get("/api/search-test",async(req,res)=>{try{const r=await externalSearch({topic:req.query.q||"notícias Brasil",area:"Geral",format:"Pesquisa"});res.json({ok:true,queries:r.queries,count:r.results.length,results:r.results.slice(0,8)});}catch(e){res.status(502).json({ok:false,error:e.message});}});
 app.use((req,res)=>req.method==="GET"?res.sendFile(path.join(__dirname,"index.html")):res.status(404).json({error:"Rota não encontrada."}));
 const PORT=process.env.PORT||3000;
