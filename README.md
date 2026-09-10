@@ -1,9 +1,9 @@
-# Jornalista AI V8 — Busca Externa + Gemini Gratuito
+# Jornalista AI V8.2.1 — Busca Externa + Gemini Gratuito
 
 Esta versão remove o Google Search Grounding da chamada Gemini. O servidor faz a pesquisa externamente usando Google News RSS e GDELT, reúne os resultados e entrega esse material ao Gemini para análise editorial.
 
 ## Por que esta versão
-O Google informa que o Grounding com Google Search não está disponível no Free Tier da Gemini API. A V8 evita esse recurso para que a análise do Gemini possa continuar usando a cota gratuita, respeitando os limites do modelo.
+O Google informa que o Grounding com Google Search não está disponível no Free Tier da Gemini API. A V8.2.1 evita esse recurso para que a análise do Gemini possa continuar usando a cota gratuita, respeitando os limites do modelo.
 
 ## Arquivos
 - index.html

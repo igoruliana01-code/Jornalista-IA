@@ -76,17 +76,11 @@ TESTE DE SANIDADE:
 - Minha confiança reflete a pauta principal?`;
 
 function modelList(){
-  const primary=process.env.GEMINI_MODEL||"gemini-3-flash-preview";
-  const configured=(process.env.GEMINI_FALLBACK_MODELS||"gemini-2.5-flash,gemini-2.5-flash-lite").split(",").map(x=>x.trim()).filter(Boolean);
+  const primary=process.env.GEMINI_MODEL||"gemini-3.7-flash";
+  const configured=(process.env.GEMINI_FALLBACK_MODELS||"gemini-2.5-flash-lite").split(",").map(x=>x.trim()).filter(Boolean);
   return [...new Set([primary,...configured])];
 }
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
-function isTransientError(error){
-  const status=Number(error?.status||error?.statusCode||error?.code);
-  const msg=String(error?.message||error||"").toLowerCase();
-  return [408,429,500,502,503,504].includes(status)||/503|unavailable|overloaded|high demand|resource_exhausted|too many requests|rate limit|timed out|timeout/.test(msg);
-}
-
 function decodeHtml(s=""){
   return s.replace(/<[^>]*>/g," ")
     .replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">")
@@ -105,7 +99,7 @@ function rssItems(xml){
     return {title:tag(b,"title"),url:tag(b,"link"),description:tag(b,"description"),date:tag(b,"pubDate"),source:tag(b,"source")};
   }).filter(x=>x.title&&x.url);
 }
-async function fetchText(url, ms=7000){
+async function fetchText(url, ms=5000){
   const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),ms);
   try{
     const r=await fetch(url,{signal:controller.signal,headers:{"user-agent":"JornalistaAI/8.0 (news research)"}});
@@ -116,10 +110,10 @@ async function fetchText(url, ms=7000){
 async function searchGoogleNews(query){
   const url=`https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=pt-BR&gl=BR&ceid=BR:pt-419`;
   const xml=await fetchText(url);
-  return rssItems(xml).slice(0,10).map(x=>({...x,provider:"Google News RSS",query}));
+  return rssItems(xml).slice(0,8).map(x=>({...x,provider:"Google News RSS",query}));
 }
 async function searchGdelt(query){
-  const url=`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(query)}&mode=artlist&maxrecords=10&format=json&sort=datedesc`;
+  const url=`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(query)}&mode=artlist&maxrecords=8&format=json&sort=datedesc`;
   const text=await fetchText(url);
   const data=JSON.parse(text);
   return (data.articles||[]).slice(0,10).map(x=>({title:x.title||x.domain,url:x.url,description:x.snippet||"",date:x.seendate||"",source:x.domain||"",provider:"GDELT",query})).filter(x=>x.url);
@@ -138,16 +132,17 @@ function dedupeResults(items){
     const key=(x.url||x.title).replace(/\/$/,"").toLowerCase();
     if(!map.has(key)) map.set(key,x);
   }
-  return [...map.values()].slice(0,18);
+  return [...map.values()].slice(0,14);
 }
 async function externalSearch(body){
-  const queries=buildQueries(body);
+  const queries=buildQueries(body).slice(0,2);
   const jobs=[];
   for(const q of queries){
-    jobs.push(searchGoogleNews(q).catch(()=>[]));
-    jobs.push(searchGdelt(q).catch(()=>[]));
+    jobs.push(searchGoogleNews(q).catch(err=>{console.error(`SEARCH_GOOGLE_NEWS_ERROR ${err.message}`);return [];}));
+    jobs.push(searchGdelt(q).catch(err=>{console.error(`SEARCH_GDELT_ERROR ${err.message}`);return [];}));
   }
   const results=dedupeResults((await Promise.all(jobs)).flat());
+  console.log(`EXTERNAL_SEARCH results=${results.length} queries=${queries.length}`);
   return {queries,results};
 }
 function formatResearch(research){
@@ -155,24 +150,50 @@ function formatResearch(research){
   return `BUSCA EXTERNA REALIZADA PELO SERVIDOR\nConsultas: ${research.queries.join(" | ")}\n\nRESULTADOS (título, fonte, data, URL e resumo/snippet):\n`+
     research.results.map((r,i)=>`[${i+1}] ${r.title}\nFonte: ${r.source||r.provider}\nData: ${r.date||"não informada"}\nURL: ${r.url}\nResumo: ${r.description||"sem resumo"}`).join("\n\n");
 }
+function errorStatus(error){
+  return Number(error?.status||error?.statusCode||error?.code||error?.response?.status||0);
+}
+function errorKind(error){
+  const status=errorStatus(error);
+  const msg=String(error?.message||error||"").toLowerCase();
+  if(status===429 || /resource_exhausted|quota_exceeded|rate_limit_exceeded|too many requests|rate limit/.test(msg)) return "quota";
+  if([408,500,502,503,504].includes(status) || /unavailable|overloaded|high demand|timed out|timeout|service unavailable/.test(msg)) return "temporary";
+  return "fatal";
+}
+function isTransientError(error){ return errorKind(error)!=="fatal"; }
+async function generateOnce(ai,model,contents,config,timeoutMs=38000){
+  const request=ai.models.generateContent({model,contents,config});
+  let timer;
+  const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error(`Tempo limite excedido ao consultar o Gemini (${timeoutMs/1000}s).`),{status:504})),timeoutMs);});
+  try{return await Promise.race([request,timeout]);}
+  finally{clearTimeout(timer);}
+}
 async function generateWithRetry({contents,config={}}){
   if(!process.env.GEMINI_API_KEY) throw new Error("Chave GEMINI_API_KEY não configurada.");
   const ai=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY});
+  const models=modelList();
   let lastError=null;
-  for(const model of modelList()){
-    for(let attempt=1;attempt<=3;attempt++){
-      try{
-        const response=await ai.models.generateContent({model,contents,config});
-        return {response,model};
-      }catch(error){
-        lastError=error;
-        if(!isTransientError(error)) throw error;
-        if(attempt<3) await sleep(Math.min(6000,1000*2**(attempt-1))+Math.floor(Math.random()*400));
-      }
+  for(let i=0;i<models.length;i++){
+    const model=models[i];
+    try{
+      console.log(`GEMINI_REQUEST model=${model} attempt=${i+1}/${models.length}`);
+      const response=await generateOnce(ai,model,contents,config);
+      console.log(`GEMINI_OK model=${model}`);
+      return {response,model};
+    }catch(error){
+      lastError=error;
+      const kind=errorKind(error);
+      console.error(`GEMINI_ERROR model=${model} kind=${kind} status=${errorStatus(error)} message=${error?.message||error}`);
+      if(kind==="fatal") throw error;
+      // Quota 429: não repetir o mesmo pedido. Tentar apenas um modelo alternativo.
+      if(kind==="quota") continue;
+      // Erros transitórios: uma espera curta antes de tentar o próximo modelo.
+      if(i<models.length-1) await sleep(1800);
     }
   }
   throw lastError||new Error("Gemini indisponível no momento.");
 }
+
 function normalizeSources(data,research){
   const external=research.results.map(r=>({title:r.title,url:r.url,why:`Encontrada na busca externa (${r.provider}). ${r.description||""}`.trim(),type:"web",tier:"A classificar"}));
   const generated=Array.isArray(data.sources)?data.sources:[];
@@ -212,16 +233,45 @@ function basePrompt(body,research){
 }
 async function analyze(body){
   const research=await externalSearch(body);
-  const {response,model}=await generateWithRetry({contents:basePrompt(body,research),config:{responseMimeType:"application/json",responseSchema:schema,temperature:0.1}});
-  let raw=response?.text||""; let data;
-  try{data=JSON.parse(raw);}catch{data=JSON.parse(raw.replace(/^```json\s*/i,"").replace(/\s*```$/i,"").trim());}
-  data=enforceSafety(data,research); data.note=(data.note||"")+` Motor Gemini: ${model}.`;
-  return data;
+  if(!research.results.length){
+    throw new Error("A busca externa não retornou fontes. Tente novamente com termos mais específicos.");
+  }
+  try{
+    const {response,model}=await generateWithRetry({contents:basePrompt(body,research),config:{responseMimeType:"application/json",responseSchema:schema,temperature:0.1}});
+    let raw=response?.text||""; let data;
+    try{data=JSON.parse(raw);}catch{data=JSON.parse(raw.replace(/^```json\s*/i,"").replace(/\s*```$/i,"").trim());}
+    data=enforceSafety(data,research); data.note=(data.note||"")+` Motor Gemini: ${model}.`;
+    return data;
+  }catch(error){
+    // A busca já foi concluída. Não escondemos as fontes só porque a IA falhou.
+    const e=new Error(error?.message||"Gemini indisponível no momento.");
+    e.code="AI_UNAVAILABLE";
+    e.status=errorStatus(error)||503;
+    e.research=research;
+    throw e;
+  }
 }
 
 app.post("/api/analyze",async(req,res)=>{
   try{if(!req.body.topic?.trim())return res.status(400).json({error:"Informe a pauta."});res.json(await analyze(req.body));}
-  catch(e){console.error("ANALYZE_ERROR",e);res.status(isTransientError(e)?503:500).json({error:isTransientError(e)?"O Gemini gratuito está temporariamente no limite. Aguarde um pouco e tente novamente.":(e.message||"Erro na apuração.")});}
+  catch(e){
+    console.error("ANALYZE_ERROR",e);
+    if(e.code==="AI_UNAVAILABLE" && e.research){
+      return res.status(200).json({
+        partial:true,
+        status:"IA INDISPONÍVEL",
+        primary_status:"IA INDISPONÍVEL",
+        confidence:0,
+        primary_evidence:"A pesquisa externa foi concluída, mas o Gemini não conseguiu analisar os resultados dentro do limite de tempo/cota.",
+        summary:"As fontes abaixo foram encontradas, porém a análise automática não foi concluída. Revise as fontes antes de publicar.",
+        confirmed:[],estimates:[],unconfirmed:[],conflicts:[],direct_evidence:[],context_evidence:[],contradiction_evidence:[],source_quality:"Pesquisa externa disponível; análise da IA pendente.",source_check:"As fontes foram obtidas externamente e não devem ser tratadas como confirmação automática.",sanity_check:["A busca externa funcionou.","A análise do Gemini não foi concluída.","A decisão editorial continua pendente de revisão humana."],
+        sources:e.research.results.slice(0,8).map(r=>({title:r.title,url:r.url,why:`Resultado encontrado por ${r.provider}. ${r.description||""}`.trim(),type:"web",tier:"A classificar"})),
+        hear:[],questions:[],check:["Revisar as fontes encontradas."],angle:"Aguardando análise do Gemini.",structure:[],headline:"Análise automática indisponível",dek:"As fontes foram encontradas, mas precisam de revisão.",lead:"A pesquisa externa encontrou fontes relacionadas à pauta.",risks:["Não publicar como confirmado sem revisar as fontes."],note:`Busca externa: ${e.research.results.length} resultados. Motivo da falha da IA: ${e.message}`
+      });
+    }
+    const transient=isTransientError(e);
+    res.status(transient?503:500).json({error:transient?"A pesquisa encontrou fontes, mas o Gemini atingiu um limite temporário. Tente novamente em instantes.":(e.message||"Erro na apuração.")});
+  }
 });
 
 app.post("/api/write",async(req,res)=>{
@@ -243,8 +293,8 @@ app.post("/api/factcheck",async(req,res)=>{
   }catch(e){res.status(isTransientError(e)?503:500).json({error:isTransientError(e)?"O Gemini gratuito está temporariamente no limite.":(e.message||"Erro no fact-check.")});}
 });
 
-app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.0-gratuita",search:"external-rss-gdelt",gemini:"no-grounding"}));
+app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.2-revisada",search:"external-rss-gdelt",gemini:"no-grounding"}));
 app.get("/api/search-test",async(req,res)=>{try{const r=await externalSearch({topic:req.query.q||"notícias Brasil",area:"Geral",format:"Pesquisa"});res.json({ok:true,queries:r.queries,count:r.results.length,results:r.results.slice(0,8)});}catch(e){res.status(502).json({ok:false,error:e.message});}});
 app.use((req,res)=>req.method==="GET"?res.sendFile(path.join(__dirname,"index.html")):res.status(404).json({error:"Rota não encontrada."}));
 const PORT=process.env.PORT||3000;
-app.listen(PORT,"0.0.0.0",()=>console.log(`Jornalista AI V8 gratuita online na porta ${PORT}`));
+app.listen(PORT,"0.0.0.0",()=>console.log(`Jornalista AI V8.2 revisada online na porta ${PORT}`));
