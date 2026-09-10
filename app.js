@@ -8,12 +8,26 @@ document.querySelectorAll(".nav").forEach(n=>n.onclick=()=>tab(n.dataset.tab));
 function mh(icon,title){return `<div class="mini-head"><div class="mini-icon">${icon}</div><h3>${title}</h3></div>`}
 function statusClass(s){s=String(s||"").toUpperCase();return /CONFLITO/.test(s)?"danger":/NÃO|NAO/.test(s)?"warn":"ok"}
 function cleanSourceWhy(text){
- let t=String(text||"").replace(/https?:\/\/[^\s<]+/gi,"").replace(/www\.[^\s<]+/gi,"");
+ let t=String(text||"");
+ const ta=document.createElement("textarea"); ta.innerHTML=t; t=ta.value;
+ t=t.replace(/<script[\s\S]*?<\/script>/gi," ").replace(/<style[\s\S]*?<\/style>/gi," ").replace(/<[^>]*>/g," ");
+ t=t.replace(/https?:\/\/[^\s<]+/gi,"").replace(/www\.[^\s<]+/gi,"");
+ t=t.replace(/target\s*=\s*["'][^"']*["']/gi," ").replace(/href\s*=\s*["'][^"']*["']/gi," ");
  t=t.replace(/Encontrada na busca externa\s*\([^)]*\)\.?/gi,"Resultado encontrado na pesquisa externa.");
  t=t.replace(/Resultado encontrado por [^.]+\.?/gi,"Resultado encontrado na pesquisa externa.");
  t=t.replace(/\s{2,}/g," ").replace(/\s+([,.])/g,"$1").trim();
  return t || "Resultado encontrado na pesquisa externa.";
 }
+const formatHints={
+ "Notícia":"⚡ Foco: fato principal, atualização e 5W1H.",
+ "Reportagem":"🔎 Foco: aprofundamento, contexto, dados e múltiplas fontes.",
+ "Nota":"⏱️ Foco: informação rápida, curta e objetiva.",
+ "Entrevista":"🎤 Foco: entrevistado, informações a obter e perguntas.",
+ "Perfil":"👤 Foco: trajetória, contexto e fatos verificáveis.",
+ "Coluna":"✍️ Foco: análise/opinião, sempre separada dos fatos."
+};
+function updateFormatHint(){const f=$("#format"),h=$("#formatHint");if(f&&h)h.textContent=formatHints[f.value]||formatHints.Notícia;}
+updateFormatHint(); $("#format")?.addEventListener("change",updateFormatHint);
 function sourceHtml(s){
  const host=esc(s.domain||(()=>{try{return new URL(s.url).hostname.replace(/^www\./,"")}catch{return "fonte"}})());
  const date=esc(s.date||"Data não informada");
@@ -35,7 +49,7 @@ $("#dashboard-empty").classList.add("hidden");$("#results").classList.remove("hi
  const cards=`<div class="result-title"><div><h2>2. Resultados da Apuração</h2><p>Apuração em camadas: fato principal, evidências, contexto e conflitos reais.</p></div><span class="pill">● Pauta analisada</span></div>
  <div class="cards"><article class="card mini">${mh("♢","Radar de Confiabilidade da Pauta")}<div class="confidence"><div class="donut" style="--p:${c}"><b>${c}%</b></div><div class="legend"><strong class="status-badge ${statusClass(st)}">${esc(st)}</strong><div><i class="dot green-dot"></i>Confirmados ${d.confirmed?.length||0}</div><div><i class="dot yellow-dot"></i>Estimativas ${d.estimates?.length||0}</div><div><i class="dot red-dot"></i>Não confirmados ${d.unconfirmed?.length||0}</div><div><i class="dot red-dot"></i>Conflitos diretos ${d.conflicts?.length||0}</div></div></div><p><b>Evidência principal:</b> ${esc(d.primary_evidence||"—")}</p><p>${esc(d.summary)}</p></article>
  <article class="card mini">${mh("✓","Evidências Diretas")}<ul>${list(d.direct_evidence)}</ul><div class="section-label">Qualidade das fontes</div><p>${esc(d.source_quality||"—")}</p></article>
- <article class="card mini">${mh("▥","Dados Importantes")}<div class="data-line">◉ <div><span>Headline</span><b>${esc(d.headline||"—")}</b></div></div><div class="data-line">◉ <div><span>Status editorial</span><b>${esc(st)}</b></div></div><div class="data-line">◉ <div><span>Confiança</span><b>${c}%</b></div></div></article></div>
+ <article class="card mini">${mh("▥","Dados Importantes")}<div class="data-line">◉ <div><span>Headline</span><b>${esc(d.headline||"—")}</b></div></div><div class="data-line">◉ <div><span>Data do fato</span><b>${esc(d.event_date||"Não identificada")}</b></div></div><div class="data-line">◉ <div><span>Horário local</span><b>${esc(d.event_time||"Não identificado")}</b></div></div><div class="data-line">◉ <div><span>Local</span><b>${esc(d.event_location||"Não identificado")}</b></div></div><div class="data-line">◉ <div><span>Status editorial</span><b>${esc(st)}</b></div></div><div class="data-line">◉ <div><span>Confiança</span><b>${c}%</b></div></div></article></div>
  <div class="wide-grid"><article class="card mini purple-card">${mh("↗","Principais Fontes")}${sources}</article><article class="card mini yellow-card">${mh("◇","Contexto — não confundir com conflito")}<ul>${list(d.context_evidence)}</ul></article><article class="card mini green-card">${mh("⚠","Conflitos Reais")}${d.contradiction_evidence?.length?`<ul>${list(d.contradiction_evidence)}</ul>`:`<p>🟢 Nenhuma contradição direta identificada.</p>`}</article></div>
  <div class="bottom-grid"><article class="card">${mh("🧪","Teste de Sanidade")}<ul>${list(d.sanity_check)}</ul><div class="notice">O radar considera a pauta principal, não detalhes históricos isolados.</div></article><article class="card">${mh("◎","Melhor Ângulo Jornalístico")}<p>${esc(d.angle)}</p><button class="linkbtn" id="goWrite">Ver ângulo completo →</button></article></div>
  <div class="bottom-grid"><article class="card">${mh("▤","Estrutura Sugerida da Matéria")}<ol class="number-list">${list(d.structure)}</ol></article><article class="card risk">${mh("⚠","Riscos e Observações")}<ul>${list(d.risks)}</ul><div class="notice">💡 Busca externa + Gemini gratuito. O Jornalista AI é um assistente de apuração; a decisão editorial final é sempre sua.</div></article></div>

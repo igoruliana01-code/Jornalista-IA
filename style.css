@@ -56,3 +56,11 @@ html,body{width:100%;max-width:100%;overflow-x:hidden}
   .source-meta{font-size:9px}
   .source-line p{font-size:10px;max-height:3em;overflow:hidden}
 }
+
+/* V8.5 — formatos inteligentes, fontes realmente limpas e evidência temporal */
+.format-hint{margin-top:7px;color:#5e7188;font-size:10px;line-height:1.35;min-height:14px}
+.source-line p{overflow-wrap:anywhere;word-break:break-word}
+/* Em telas estreitas/viewport de celular, cada bloco de apuração ocupa uma coluna. */
+@media(max-width:1000px){
+  .cards,.wide-grid,.bottom-grid{grid-template-columns:1fr!important}
+}

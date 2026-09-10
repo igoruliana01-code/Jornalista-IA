@@ -13,7 +13,7 @@ app.use(express.static(__dirname));
 const schema = {
   type:"object",
   properties:{
-    status:{type:"string"}, confidence:{type:"integer"},
+    status:{type:"string"}, confidence:{type:"integer"}, event_date:{type:"string"}, event_time:{type:"string"}, event_location:{type:"string"},
     primary_status:{type:"string"}, primary_evidence:{type:"string"}, summary:{type:"string"},
     confirmed:{type:"array",items:{type:"string"}}, estimates:{type:"array",items:{type:"string"}},
     unconfirmed:{type:"array",items:{type:"string"}}, conflicts:{type:"array",items:{type:"string"}},
@@ -25,7 +25,7 @@ const schema = {
     angle:{type:"string"}, structure:{type:"array",items:{type:"string"}},
     headline:{type:"string"}, dek:{type:"string"}, lead:{type:"string"}, risks:{type:"array",items:{type:"string"}}, note:{type:"string"}
   },
-  required:["status","confidence","primary_status","primary_evidence","summary","confirmed","estimates","unconfirmed","conflicts","direct_evidence","context_evidence","contradiction_evidence","source_quality","source_check","sanity_check","sources","hear","questions","check","angle","structure","headline","dek","lead","risks","note"]
+  required:["status","confidence","event_date","event_time","event_location","primary_status","primary_evidence","summary","confirmed","estimates","unconfirmed","conflicts","direct_evidence","context_evidence","contradiction_evidence","source_quality","source_check","sanity_check","sources","hear","questions","check","angle","structure","headline","dek","lead","risks","note"]
 };
 
 const editorial = `Você é o Jornalista AI, um assistente profissional de apuração jornalística.
@@ -67,6 +67,22 @@ CONFIDÊNCIA:
 PROTOCOLO ESPORTIVO:
 Confirme competição, fase, data, local e status. Resultados de anos anteriores são contexto histórico. Uma página que não apareceu na busca não deve ser tratada como prova de que o jogo não existe.
 
+FORMATOS EDITORIAIS INTELIGENTES:
+- NOTÍCIA: priorize o fato atual, 5W1H, atualização objetiva, título, subtítulo e lide. Evite contexto longo que não seja necessário para entender o fato.
+- NOTA: entregue apuração enxuta e rápida, com somente os fatos essenciais e poucas fontes fortes.
+- REPORTAGEM: aprofunde contexto, histórico, causas, consequências, dados, documentos, múltiplas vozes e perguntas que ainda precisam ser respondidas.
+- ENTREVISTA: identifique quem deve ser ouvido, por quê, o que precisamos descobrir e perguntas objetivas, de aprofundamento e de confronto.
+- PERFIL: priorize trajetória, contexto, marcos, declarações e fatos verificáveis sobre a pessoa/organização, sem transformar elogios em fatos.
+- COLUNA: separe rigorosamente fato verificado de análise/opinião e não apresente interpretação como informação factual.
+
+REGRAS DE EVIDÊNCIA E TEMPO:
+- Nunca escreva uma evidência de forma genérica quando o nome da pessoa estiver disponível. Exemplo: prefira “Miguel Merentiel, ex-Palmeiras, marcou o gol...” em vez de “ex-jogador do Palmeiras marcou...”.
+- Preserve nomes próprios, clubes, competições, placares e números exatamente como aparecem nas fontes.
+- Diferencie DATA DO FATO/EVENTO da DATA DE PUBLICAÇÃO/ATUALIZAÇÃO da matéria. Para um jogo, use a data em que a partida realmente ocorreu no horário local do evento. Não confunda uma matéria publicada em 09/09 com uma partida disputada em 08/09.
+- Se fontes em UTC mostrarem o dia seguinte, priorize a data local informada por fontes esportivas/veículos e explique a diferença somente se necessário.
+- event_date deve ser a data do acontecimento, em formato DD/MM/AAAA. event_time deve ser o horário local do acontecimento quando estiver disponível. event_location deve informar o local quando estiver disponível.
+- direct_evidence deve ser composto por frases factuais completas, com entidade + ação + detalhe verificável + data quando pertinente.
+
 TESTE DE SANIDADE:
 - Estou confundindo histórico com evento atual?
 - Tenho evidência diretamente relacionada?
@@ -82,11 +98,16 @@ function modelList(){
 }
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 function decodeHtml(s=""){
-  return s.replace(/<[^>]*>/g," ")
+  return String(s||"")
     .replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">")
     .replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&#x27;/gi,"'")
     .replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(Number(n)))
     .replace(/&#x([0-9a-f]+);/gi,(_,n)=>String.fromCharCode(parseInt(n,16)))
+    .replace(/<script[\s\S]*?<\/script>/gi," ")
+    .replace(/<style[\s\S]*?<\/style>/gi," ")
+    .replace(/<[^>]*>/g," ")
+    .replace(/https?:\/\/[^\s<]+/gi," ")
+    .replace(/www\.[^\s<]+/gi," ")
     .replace(/\s+/g," ").trim();
 }
 function tag(block,name){
@@ -121,8 +142,12 @@ async function searchGdelt(query){
 function cleanQuery(q){return String(q||"").replace(/["'`]/g," ").replace(/\s+/g," ").trim().slice(0,180);}
 function buildQueries(body){
   const topic=cleanQuery(body.topic); const year=new Date().getFullYear();
-  const area=cleanQuery(body.area||"");
+  const area=cleanQuery(body.area||""); const format=String(body.format||"Notícia");
   const qs=[`${topic} ${year}`,`${topic} ${area} ${year}`.trim()];
+  if(/Reportagem/i.test(format)) qs.push(`${topic} contexto histórico causas consequências ${year}`);
+  else if(/Entrevista/i.test(format)) qs.push(`${topic} entrevista declaração fala ${year}`);
+  else if(/Perfil/i.test(format)) qs.push(`${topic} trajetória histórico ${year}`);
+  else if(/Coluna/i.test(format)) qs.push(`${topic} análise repercussão ${year}`);
   if(/esport/i.test(area)||/futebol|basquete|nba|libertadores|champions|f1|futebol/i.test(topic)) qs.push(`${topic} calendário oficial ${year}`);
   return [...new Set(qs.filter(Boolean))].slice(0,3);
 }
@@ -214,9 +239,10 @@ function hostOf(url=""){
 }
 function classifyTier(url="", source=""){
   const h=hostOf(url); const text=(h+" "+String(source||"")).toLowerCase();
-  const official=["conmebol.com","cbf.com.br","fifa.com","uefa.com","nba.com","nfl.com","mlb.com","olympics.com","gov.br","planalto.gov.br","stf.jus.br","camara.leg.br","senado.leg.br","ibge.gov.br","anatel.gov.br","apple.com","microsoft.com","google.com"];
+  const aggregator=/^(news\.google\.com|www\.google\.com|google\.com)$/i.test(h);
+  const official=["conmebol.com","cbf.com.br","fifa.com","uefa.com","nba.com","nfl.com","mlb.com","olympics.com","gov.br","planalto.gov.br","stf.jus.br","camara.leg.br","senado.leg.br","ibge.gov.br","anatel.gov.br","apple.com","microsoft.com"];
   const tier2=["ge.globo.com","uol.com.br","espn.com.br","terra.com.br","g1.globo.com","folha.uol.com.br","estadao.com.br","cnnbrasil.com.br","gazetaesportiva.com","placar.com.br","lance.com.br","oglobo.globo.com","reuters.com","apnews.com","bbc.com"];
-  if(official.some(x=>text.includes(x))) return "TIER 1 · OFICIAL";
+  if(!aggregator && official.some(x=>text.includes(x))) return "TIER 1 · OFICIAL";
   if(tier2.some(x=>text.includes(x))) return "TIER 2 · IMPRENSA";
   return "TIER 3 · ESPECIALIZADA";
 }
@@ -226,9 +252,20 @@ function shortDate(value=""){
   if(Number.isNaN(d.getTime())) return String(value).slice(0,60);
   return new Intl.DateTimeFormat("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric"}).format(d);
 }
+function cleanSourceText(value=""){
+  let t=decodeHtml(String(value||""));
+  t=t.replace(/target\s*=\s*["'][^"']*["']/gi," ")
+    .replace(/href\s*=\s*["'][^"']*["']/gi," ")
+    .replace(/Encontrada na busca externa\s*\([^)]*\)\.?/gi,"Resultado encontrado na pesquisa externa.")
+    .replace(/Resultado encontrado por [^.]+\.?/gi,"Resultado encontrado na pesquisa externa.")
+    .replace(/\s+/g," ").trim();
+  return t;
+}
 function sourceCardData(r, why=""){
-  const url=r.url||""; const host=hostOf(url)||r.source||r.provider||"Fonte";
-  return {title:r.title||"Fonte sem título",url,why:String(why||r.description||"").replace(/https?:\/\/[^\s]+/gi,"").replace(/www\.[^\s]+/gi,"").replace(/Encontrada na busca externa\s*\([^)]*\)\.?/gi,"Resultado encontrado na pesquisa externa.").trim().slice(0,220),type:"web",tier:classifyTier(url,r.source),provider:r.provider||"Busca externa",domain:host,date:shortDate(r.date)};
+  const url=r.url||""; const host=hostOf(url); const publisher=cleanSourceText(r.source||"");
+  const display=publisher||host||r.provider||"Fonte";
+  const cleanWhy=cleanSourceText(why||r.description||"");
+  return {title:r.title||"Fonte sem título",url,why:cleanWhy.slice(0,220),type:"web",tier:classifyTier(url,`${r.source||""} ${r.title||""}`),provider:r.provider||"Busca externa",domain:display,date:shortDate(r.date)};
 }
 function normalizeSources(data,research){
   const external=research.results.map(r=>sourceCardData(r,`Resultado encontrado na pesquisa externa. ${r.description||""}`.trim()));
@@ -238,7 +275,7 @@ function normalizeSources(data,research){
   for(const s of generated){
     if(s?.url && allowed.has(s.url)){
       const base=allowed.get(s.url);
-      final.push({...base,why:String(s.why||base.why).slice(0,320),tier:classifyTier(base.url,s.tier)});
+      final.push({...base,why:cleanSourceText(s.why||base.why).slice(0,320),tier:classifyTier(base.url,`${s.tier||""} ${base.domain||""}`)});
     }
   }
   for(const s of external) if(!final.some(x=>x.url===s.url)) final.push(s);
@@ -266,9 +303,20 @@ function enforceSafety(data,research){
   data.note=(data.note||"")+` Busca externa: ${research.results.length} resultados encontrados.`;
   return data;
 }
+function formatProfile(format="Notícia"){
+  const profiles={
+    "Notícia":"Foco no fato principal e na atualização. Priorize 5W1H, evidência direta, título, subtítulo e lide objetivos.",
+    "Nota":"Foco em velocidade e concisão. Use apenas os fatos essenciais, evitando contexto ou análise desnecessários.",
+    "Reportagem":"Foco em aprofundamento. Procure contexto, histórico, causas, consequências, dados, documentos, múltiplas fontes e pessoas que ainda precisam ser ouvidas.",
+    "Entrevista":"Foco em preparação de entrevista. Identifique entrevistados relevantes, motivo de ouvi-los, informações a obter e perguntas básicas, de aprofundamento e de confronto.",
+    "Perfil":"Foco em trajetória e contexto. Destaque fatos verificáveis, cronologia, marcos e declarações relevantes sem transformar elogios em fatos.",
+    "Coluna":"Foco analítico. Separe claramente fatos confirmados de interpretação/opinião e não invente fatos para sustentar uma tese."
+  };
+  return profiles[format]||profiles["Notícia"];
+}
 function basePrompt(body,research){
-  const today=new Date().toISOString().slice(0,10);
-  return `${editorial}\n\nDATA ATUAL: ${today}\n\nPAUTA:\nTema: ${body.topic}\nÁrea: ${body.area||"Geral"}\nFormato: ${body.format||"Notícia"}\nInformações/links fornecidos pelo usuário:\n${body.sources||"(nenhum)"}\n\n${formatResearch(research)}\n\nTAREFA:\n1. Extraia a afirmação principal em uma frase.\n2. Verifique primeiro essa afirmação usando os resultados externos acima.\n3. Separe direct_evidence, context_evidence e contradiction_evidence.\n4. Só use URLs que aparecem nos resultados externos ou nos links fornecidos pelo usuário.\n5. Não invente uma fonte porque ela parece provável.\n6. Monte sources com título, URL real, motivo e tier.\n7. Faça o teste de sanidade.\n8. Escolha primary_status e confidence com base apenas na pauta principal.\n9. Headline/dek/lead devem respeitar o status. Se não confirmado, use linguagem condicional.\n10. Se o evento já aconteceu, classifique como CONFIRMADO / ENCERRADO e explique a atualização temporal necessária.`;
+  const today=new Date().toISOString().slice(0,10); const format=body.format||"Notícia";
+  return `${editorial}\n\nDATA ATUAL: ${today}\n\nPAUTA:\nTema: ${body.topic}\nÁrea: ${body.area||"Geral"}\nFormato: ${format}\nESTRATÉGIA DO FORMATO: ${formatProfile(format)}\nInformações/links fornecidos pelo usuário:\n${body.sources||"(nenhum)"}\n\n${formatResearch(research)}\n\nTAREFA:\n1. Extraia a afirmação principal em uma frase.\n2. Verifique primeiro essa afirmação usando os resultados externos acima.\n3. Separe direct_evidence, context_evidence e contradiction_evidence.\n4. Em direct_evidence, escreva frases completas e específicas: inclua nome próprio, equipe/entidade, ação, placar/número e data do fato quando pertinente. NUNCA substitua o nome por uma descrição genérica se o nome estiver nas fontes.\n5. Determine event_date, event_time e event_location a partir do acontecimento, não da data de publicação da matéria. Para jogos, use a data local em que a partida começou.\n6. Só use URLs que aparecem nos resultados externos ou nos links fornecidos pelo usuário.\n7. Não invente uma fonte porque ela parece provável.\n8. Monte sources com título, URL real, motivo e tier.\n9. Faça o teste de sanidade, especialmente para separar data do evento de data de publicação.\n10. Escolha primary_status e confidence com base apenas na pauta principal.\n11. Headline/dek/lead devem respeitar o status. Se não confirmado, use linguagem condicional.\n12. Se o evento já aconteceu, classifique como CONFIRMADO / ENCERRADO.\n13. Se houver divergência de fuso horário, não chame isso de conflito factual: use a data local do evento e, se necessário, explique a diferença de UTC no campo note.`;
 }
 async function analyze(body){
   const research=await externalSearch(body);
@@ -301,6 +349,7 @@ app.post("/api/analyze",async(req,res)=>{
         status:"IA INDISPONÍVEL",
         primary_status:"IA INDISPONÍVEL",
         confidence:0,
+        event_date:"",event_time:"",event_location:"",
         primary_evidence:"A pesquisa externa foi concluída, mas o Gemini não conseguiu analisar os resultados dentro do limite de tempo/cota.",
         summary:"As fontes abaixo foram encontradas, porém a análise automática não foi concluída. Revise as fontes antes de publicar.",
         confirmed:[],estimates:[],unconfirmed:[],conflicts:[],direct_evidence:[],context_evidence:[],contradiction_evidence:[],source_quality:"Pesquisa externa disponível; análise da IA pendente.",source_check:"As fontes foram obtidas externamente e não devem ser tratadas como confirmação automática.",sanity_check:["A busca externa funcionou.","A análise do Gemini não foi concluída.","A decisão editorial continua pendente de revisão humana."],
@@ -332,7 +381,7 @@ app.post("/api/factcheck",async(req,res)=>{
   }catch(e){res.status(isTransientError(e)?503:500).json({error:isTransientError(e)?"O Gemini gratuito está temporariamente no limite.":(e.message||"Erro no fact-check.")});}
 });
 
-app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.4-interactions",search:"external-rss-gdelt",gemini:"interactions-api"}));
+app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.5-smart-formats",search:"external-rss-gdelt",gemini:"interactions-api"}));
 app.get("/api/search-test",async(req,res)=>{try{const r=await externalSearch({topic:req.query.q||"notícias Brasil",area:"Geral",format:"Pesquisa"});res.json({ok:true,queries:r.queries,count:r.results.length,results:r.results.slice(0,8)});}catch(e){res.status(502).json({ok:false,error:e.message});}});
 app.use((req,res)=>req.method==="GET"?res.sendFile(path.join(__dirname,"index.html")):res.status(404).json({error:"Rota não encontrada."}));
 const PORT=process.env.PORT||3000;
