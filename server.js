@@ -194,13 +194,37 @@ async function generateWithRetry({contents,config={}}){
   throw lastError||new Error("Gemini indisponível no momento.");
 }
 
+function hostOf(url=""){
+  try{return new URL(url).hostname.replace(/^www\./,"").toLowerCase();}catch{return "";}
+}
+function classifyTier(url="", source=""){
+  const h=hostOf(url); const text=(h+" "+String(source||"")).toLowerCase();
+  const official=["conmebol.com","cbf.com.br","fifa.com","uefa.com","nba.com","nfl.com","mlb.com","olympics.com","gov.br","planalto.gov.br","stf.jus.br","camara.leg.br","senado.leg.br","ibge.gov.br","anatel.gov.br","apple.com","microsoft.com","google.com"];
+  const tier2=["ge.globo.com","uol.com.br","espn.com.br","terra.com.br","g1.globo.com","folha.uol.com.br","estadao.com.br","cnnbrasil.com.br","gazetaesportiva.com","placar.com.br","lance.com.br","oglobo.globo.com","reuters.com","apnews.com","bbc.com"];
+  if(official.some(x=>text.includes(x))) return "TIER 1 · OFICIAL";
+  if(tier2.some(x=>text.includes(x))) return "TIER 2 · IMPRENSA";
+  return "TIER 3 · ESPECIALIZADA";
+}
+function shortDate(value=""){
+  if(!value) return "Data não informada";
+  const d=new Date(value);
+  if(Number.isNaN(d.getTime())) return String(value).slice(0,60);
+  return new Intl.DateTimeFormat("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric"}).format(d);
+}
+function sourceCardData(r, why=""){
+  const url=r.url||""; const host=hostOf(url)||r.source||r.provider||"Fonte";
+  return {title:r.title||"Fonte sem título",url,why:why||String(r.description||"").slice(0,220),type:"web",tier:classifyTier(url,r.source),provider:r.provider||"Busca externa",domain:host,date:shortDate(r.date)};
+}
 function normalizeSources(data,research){
-  const external=research.results.map(r=>({title:r.title,url:r.url,why:`Encontrada na busca externa (${r.provider}). ${r.description||""}`.trim(),type:"web",tier:"A classificar"}));
+  const external=research.results.map(r=>sourceCardData(r,`Encontrada na busca externa (${r.provider}). ${r.description||""}`.trim()));
   const generated=Array.isArray(data.sources)?data.sources:[];
   const allowed=new Map(external.map(x=>[x.url,x]));
   const final=[];
   for(const s of generated){
-    if(s?.url && allowed.has(s.url)) final.push({...allowed.get(s.url),why:s.why||allowed.get(s.url).why,tier:s.tier||"A classificar"});
+    if(s?.url && allowed.has(s.url)){
+      const base=allowed.get(s.url);
+      final.push({...base,why:String(s.why||base.why).slice(0,320),tier:classifyTier(base.url,s.tier)});
+    }
   }
   for(const s of external) if(!final.some(x=>x.url===s.url)) final.push(s);
   return final.slice(0,8);
@@ -265,7 +289,7 @@ app.post("/api/analyze",async(req,res)=>{
         primary_evidence:"A pesquisa externa foi concluída, mas o Gemini não conseguiu analisar os resultados dentro do limite de tempo/cota.",
         summary:"As fontes abaixo foram encontradas, porém a análise automática não foi concluída. Revise as fontes antes de publicar.",
         confirmed:[],estimates:[],unconfirmed:[],conflicts:[],direct_evidence:[],context_evidence:[],contradiction_evidence:[],source_quality:"Pesquisa externa disponível; análise da IA pendente.",source_check:"As fontes foram obtidas externamente e não devem ser tratadas como confirmação automática.",sanity_check:["A busca externa funcionou.","A análise do Gemini não foi concluída.","A decisão editorial continua pendente de revisão humana."],
-        sources:e.research.results.slice(0,8).map(r=>({title:r.title,url:r.url,why:`Resultado encontrado por ${r.provider}. ${r.description||""}`.trim(),type:"web",tier:"A classificar"})),
+        sources:e.research.results.slice(0,8).map(r=>sourceCardData(r,`Resultado encontrado por ${r.provider}. ${r.description||""}`.trim())),
         hear:[],questions:[],check:["Revisar as fontes encontradas."],angle:"Aguardando análise do Gemini.",structure:[],headline:"Análise automática indisponível",dek:"As fontes foram encontradas, mas precisam de revisão.",lead:"A pesquisa externa encontrou fontes relacionadas à pauta.",risks:["Não publicar como confirmado sem revisar as fontes."],note:`Busca externa: ${e.research.results.length} resultados. Motivo da falha da IA: ${e.message}`
       });
     }
@@ -293,8 +317,8 @@ app.post("/api/factcheck",async(req,res)=>{
   }catch(e){res.status(isTransientError(e)?503:500).json({error:isTransientError(e)?"O Gemini gratuito está temporariamente no limite.":(e.message||"Erro no fact-check.")});}
 });
 
-app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.2-revisada",search:"external-rss-gdelt",gemini:"no-grounding"}));
+app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.3-revisada",search:"external-rss-gdelt",gemini:"no-grounding"}));
 app.get("/api/search-test",async(req,res)=>{try{const r=await externalSearch({topic:req.query.q||"notícias Brasil",area:"Geral",format:"Pesquisa"});res.json({ok:true,queries:r.queries,count:r.results.length,results:r.results.slice(0,8)});}catch(e){res.status(502).json({ok:false,error:e.message});}});
 app.use((req,res)=>req.method==="GET"?res.sendFile(path.join(__dirname,"index.html")):res.status(404).json({error:"Rota não encontrada."}));
 const PORT=process.env.PORT||3000;
-app.listen(PORT,"0.0.0.0",()=>console.log(`Jornalista AI V8.2 revisada online na porta ${PORT}`));
+app.listen(PORT,"0.0.0.0",()=>console.log(`Jornalista AI V8.3 revisada online na porta ${PORT}`));
