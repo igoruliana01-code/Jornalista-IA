@@ -25,7 +25,7 @@ const schema = {
     angle:{type:"string"}, structure:{type:"array",items:{type:"string"}},
     headline:{type:"string"}, dek:{type:"string"}, lead:{type:"string"}, risks:{type:"array",items:{type:"string"}}, note:{type:"string"}
   },
-  required:["status","confidence","event_date","event_time","event_location","primary_status","primary_evidence","summary","confirmed","estimates","unconfirmed","conflicts","direct_evidence","context_evidence","contradiction_evidence","source_quality","source_check","sanity_check","sources","hear","questions","check","angle","structure","headline","dek","lead","risks","note"]
+  required:["status","confidence","event_date","event_time","event_location","primary_status","primary_evidence","summary","confirmed","estimates","unconfirmed","conflicts","direct_evidence","evidence_records","context_evidence","contradiction_evidence","source_quality","source_check","sanity_check","sources","hear","questions","check","angle","structure","headline","dek","lead","risks","note"]
 };
 
 const editorial = `Você é o Jornalista AI, um assistente profissional de apuração jornalística.
@@ -82,6 +82,9 @@ REGRAS DE EVIDÊNCIA E TEMPO:
 - Se fontes em UTC mostrarem o dia seguinte, priorize a data local informada por fontes esportivas/veículos e explique a diferença somente se necessário.
 - event_date deve ser a data do acontecimento, em formato DD/MM/AAAA. event_time deve ser o horário local do acontecimento quando estiver disponível. event_location deve informar o local quando estiver disponível.
 - direct_evidence deve ser composto por frases factuais completas, com entidade + ação + detalhe verificável + data quando pertinente.
+- evidence_records é o rastreamento da evidência: cada afirmação deve indicar exatamente uma ou mais fontes reais encontradas. Use o URL real de uma fonte do bloco de resultados.
+- level em evidence_records deve ser CONFIRMADO, PARCIAL ou NÃO CONFIRMADO. Só use CONFIRMADO quando a fonte sustentar diretamente a afirmação.
+- Não transforme sua própria inferência em fato confirmado. A justificativa em reason deve explicar brevemente por que a fonte sustenta a afirmação.
 
 TESTE DE SANIDADE:
 - Estou confundindo histórico com evento atual?
@@ -290,8 +293,25 @@ function classifyStatus(data){
   if(/CONFIRMADO/.test(s)) return "CONFIRMADO";
   return "NÃO CONFIRMADO";
 }
+function normalizeEvidenceRecords(data,research){
+  const allowed=new Map(research.results.map(r=>[r.url,{title:r.title,url:r.url}]));
+  const records=Array.isArray(data.evidence_records)?data.evidence_records:[];
+  const clean=[];
+  for(const e of records){
+    const url=String(e?.source_url||"").trim();
+    if(!e?.claim || !allowed.has(url)) continue;
+    const base=allowed.get(url);
+    const level=/^CONFIRMADO$/i.test(String(e.level||""))?"CONFIRMADO":/^PARCIAL/i.test(String(e.level||""))?"PARCIAL":"NÃO CONFIRMADO";
+    clean.push({claim:cleanSourceText(e.claim).slice(0,320),level,source_title:base.title||cleanSourceText(e.source_title||"Fonte"),source_url:url,reason:cleanSourceText(e.reason||"A fonte foi encontrada na busca externa e sustenta a afirmação.").slice(0,260)});
+  }
+  return clean.slice(0,20);
+}
 function enforceSafety(data,research){
   data.sources=normalizeSources(data,research);
+  data.evidence_records=normalizeEvidenceRecords(data,research);
+  if(!data.evidence_records.length && (data.direct_evidence||[]).length){
+    data.source_check=(data.source_check||"")+" Nenhum vínculo automático entre evidência e fonte foi retornado; revise manualmente antes de publicar.";
+  }
   data.primary_status=classifyStatus(data); data.status=data.primary_status;
   data.confidence=Math.max(0,Math.min(100,Number(data.confidence)||0));
   data.conflicts=(data.conflicts||[]).filter(x=>/diret|contrad|incompat/i.test(String(x)));
@@ -316,7 +336,10 @@ function formatProfile(format="Notícia"){
 }
 function basePrompt(body,research){
   const today=new Date().toISOString().slice(0,10); const format=body.format||"Notícia";
-  return `${editorial}\n\nDATA ATUAL: ${today}\n\nPAUTA:\nTema: ${body.topic}\nÁrea: ${body.area||"Geral"}\nFormato: ${format}\nESTRATÉGIA DO FORMATO: ${formatProfile(format)}\nInformações/links fornecidos pelo usuário:\n${body.sources||"(nenhum)"}\n\n${formatResearch(research)}\n\nTAREFA:\n1. Extraia a afirmação principal em uma frase.\n2. Verifique primeiro essa afirmação usando os resultados externos acima.\n3. Separe direct_evidence, context_evidence e contradiction_evidence.\n4. Em direct_evidence, escreva frases completas e específicas: inclua nome próprio, equipe/entidade, ação, placar/número e data do fato quando pertinente. NUNCA substitua o nome por uma descrição genérica se o nome estiver nas fontes.\n5. Determine event_date, event_time e event_location a partir do acontecimento, não da data de publicação da matéria. Para jogos, use a data local em que a partida começou.\n6. Só use URLs que aparecem nos resultados externos ou nos links fornecidos pelo usuário.\n7. Não invente uma fonte porque ela parece provável.\n8. Monte sources com título, URL real, motivo e tier.\n9. Faça o teste de sanidade, especialmente para separar data do evento de data de publicação.\n10. Escolha primary_status e confidence com base apenas na pauta principal.\n11. Headline/dek/lead devem respeitar o status. Se não confirmado, use linguagem condicional.\n12. Se o evento já aconteceu, classifique como CONFIRMADO / ENCERRADO.\n13. Se houver divergência de fuso horário, não chame isso de conflito factual: use a data local do evento e, se necessário, explique a diferença de UTC no campo note.`;
+  return `${editorial}\n\nDATA ATUAL: ${today}\n\nPAUTA:\nTema: ${body.topic}\nÁrea: ${body.area||"Geral"}\nFormato: ${format}\nESTRATÉGIA DO FORMATO: ${formatProfile(format)}\nInformações/links fornecidos pelo usuário:\n${body.sources||"(nenhum)"}\n\n${formatResearch(research)}\n\nTAREFA:\n1. Extraia a afirmação principal em uma frase.\n2. Verifique primeiro essa afirmação usando os resultados externos acima.\n3. Separe direct_evidence, context_evidence e contradiction_evidence.\n4. Em direct_evidence, escreva frases completas e específicas: inclua nome próprio, equipe/entidade, ação, placar/número e data do fato quando pertinente. NUNCA substitua o nome por uma descrição genérica se o nome estiver nas fontes.\n5. Determine event_date, event_time e event_location a partir do acontecimento, não da data de publicação da matéria. Para jogos, use a data local em que a partida começou.\n6. Só use URLs que aparecem nos resultados externos ou nos links fornecidos pelo usuário.\n7. Não invente uma fonte porque ela parece provável.\n8. Monte sources com título, URL real, motivo e tier.\n9. Faça o teste de sanidade, especialmente para separar data do evento de data de publicação.\n10. Escolha primary_status e confidence com base apenas na pauta principal.\n11. Headline/dek/lead devem respeitar o status. Se não confirmado, use linguagem condicional.\n12. Se o evento já aconteceu, classifique como CONFIRMADO / ENCERRADO.
+13. Para cada item factual importante, crie evidence_records com a fonte exata. Se não houver fonte suficiente, marque como PARCIAL ou NÃO CONFIRMADO.
+14. Não use a palavra “confirmado” apenas porque várias matérias repetem a mesma informação; avalie a qualidade e independência das fontes.
+15. Se duas fontes divergirem sobre uma data, placar, nome ou número, registre a divergência em contradiction_evidence e conflicts.\n16. Se houver divergência de fuso horário, não chame isso de conflito factual: use a data local do evento e, se necessário, explique a diferença de UTC no campo note.`;
 }
 async function analyze(body){
   const research=await externalSearch(body);
@@ -352,7 +375,7 @@ app.post("/api/analyze",async(req,res)=>{
         event_date:"",event_time:"",event_location:"",
         primary_evidence:"A pesquisa externa foi concluída, mas o Gemini não conseguiu analisar os resultados dentro do limite de tempo/cota.",
         summary:"As fontes abaixo foram encontradas, porém a análise automática não foi concluída. Revise as fontes antes de publicar.",
-        confirmed:[],estimates:[],unconfirmed:[],conflicts:[],direct_evidence:[],context_evidence:[],contradiction_evidence:[],source_quality:"Pesquisa externa disponível; análise da IA pendente.",source_check:"As fontes foram obtidas externamente e não devem ser tratadas como confirmação automática.",sanity_check:["A busca externa funcionou.","A análise do Gemini não foi concluída.","A decisão editorial continua pendente de revisão humana."],
+        confirmed:[],estimates:[],unconfirmed:[],conflicts:[],direct_evidence:[],evidence_records:[],context_evidence:[],contradiction_evidence:[],source_quality:"Pesquisa externa disponível; análise da IA pendente.",source_check:"As fontes foram obtidas externamente e não devem ser tratadas como confirmação automática.",sanity_check:["A busca externa funcionou.","A análise do Gemini não foi concluída.","A decisão editorial continua pendente de revisão humana."],
         sources:e.research.results.slice(0,8).map(r=>sourceCardData(r,`Resultado encontrado na pesquisa externa. ${r.description||""}`.trim())),
         hear:[],questions:[],check:["Revisar as fontes encontradas."],angle:"Aguardando análise do Gemini.",structure:[],headline:"Análise automática indisponível",dek:"As fontes foram encontradas, mas precisam de revisão.",lead:"A pesquisa externa encontrou fontes relacionadas à pauta.",risks:["Não publicar como confirmado sem revisar as fontes."],note:`Busca externa: ${e.research.results.length} resultados. Motivo da falha da IA: ${e.message}`
       });
@@ -381,8 +404,8 @@ app.post("/api/factcheck",async(req,res)=>{
   }catch(e){res.status(isTransientError(e)?503:500).json({error:isTransientError(e)?"O Gemini gratuito está temporariamente no limite.":(e.message||"Erro no fact-check.")});}
 });
 
-app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.5-smart-formats",search:"external-rss-gdelt",gemini:"interactions-api"}));
+app.get("/health",(req,res)=>res.json({ok:true,service:"Jornalista AI",version:"8.6-verifiable-research",search:"external-rss-gdelt",gemini:"interactions-api"}));
 app.get("/api/search-test",async(req,res)=>{try{const r=await externalSearch({topic:req.query.q||"notícias Brasil",area:"Geral",format:"Pesquisa"});res.json({ok:true,queries:r.queries,count:r.results.length,results:r.results.slice(0,8)});}catch(e){res.status(502).json({ok:false,error:e.message});}});
 app.use((req,res)=>req.method==="GET"?res.sendFile(path.join(__dirname,"index.html")):res.status(404).json({error:"Rota não encontrada."}));
 const PORT=process.env.PORT||3000;
-app.listen(PORT,"0.0.0.0",()=>console.log(`Jornalista AI V8.4 Interactions online na porta ${PORT}`));
+app.listen(PORT,"0.0.0.0",()=>console.log(`Jornalista AI V8.6 Apuração Verificável online na porta ${PORT}`));
