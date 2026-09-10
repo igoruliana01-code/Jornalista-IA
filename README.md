@@ -1,12 +1,7 @@
-# Jornalista AI V8.6.6 — Auditoria de Evidências
+# Jornalista AI V8.6.7 — Radar corrigido
 
-Correções desta revisão:
-- Render agora usa `gemini-3.5-flash-lite` por padrão, evitando o modelo 3.7 que causou o erro de acesso na versão anterior.
-- Interactions API configurada com `store:false`, deixando as chamadas estateless e evitando armazenamento desnecessário das pautas.
-- Confiança agora recebe teto baseado nas evidências realmente vinculadas, em vez de confiar apenas no número produzido pelo Gemini.
-- Pautas amplas só consideram `FATO DOCUMENTADO + DIRETA + CONFIRMADO` como evidência direta da tese.
-- Fatos contextuais deixam de aparecer como evidência direta.
-- Status `CONFIRMADO / ENCERRADO` é reconhecido corretamente antes de `CONFIRMADO`.
-- `/health` atualizado para a versão 8.6.6.
-
-A pesquisa continua usando Google News RSS + GDELT, com Gemini via Interactions API.
+Correções sobre a V8.6.6:
+- O Radar agora conta fatos documentados, declarações e itens não comprovados a partir de `evidence_records`, evitando que uma declaração seja contada como fato confirmado.
+- “Evidência principal” foi renomeada visualmente para “Síntese da apuração”, deixando claro que é uma leitura editorial e não uma prova.
+- Prompt reforça a separação entre síntese e evidência factual.
+- Mantém Interactions API, `gemini-3.5-flash-lite`, `store:false`, guardrails de confiança e classificação das evidências.

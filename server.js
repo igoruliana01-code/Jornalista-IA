@@ -477,7 +477,8 @@ Se o tema for uma pergunta ampla, opinativa ou analítica (por exemplo, “quem 
 14. Se a pauta for ampla, não deixe direct_evidence vazio apenas porque a pergunta central não é binária: preencha-o com fatos verificáveis que ajudem a responder as subquestões.
 15. Nunca use uma URL que não esteja no bloco RESULTADOS.
 16. Não use a palavra “confirmado” apenas porque várias matérias repetem a mesma informação; avalie a qualidade e independência das fontes.
-17. Se duas fontes divergirem sobre uma data, placar, nome ou número, registre a divergência em contradiction_evidence e conflicts.\n16. Se houver divergência de fuso horário, não chame isso de conflito factual: use a data local do evento e, se necessário, explique a diferença de UTC no campo note.`;
+17. Se duas fontes divergirem sobre uma data, placar, nome ou número, registre a divergência em contradiction_evidence e conflicts.\n18. Se houver divergência de fuso horário, não chame isso de conflito factual: use a data local do evento e, se necessário, explique a diferença de UTC no campo note.
+19. Em primary_evidence, escreva uma síntese editorial da apuração, não uma prova isolada. Não apresente interpretação como se fosse fato documentado.`;
 }
 async function analyze(body){
   const research=await externalSearch(body);
