@@ -41,3 +41,18 @@ html,body{width:100%;max-width:100%;overflow-x:hidden}
   .form-foot span{font-size:10px}
   .card{border-radius:11px}
 }
+
+
+/* V8.4.2 — fontes limpas e layout mobile profissional */
+.source-line{overflow:hidden;contain:layout paint}
+.source-line p{max-height:3.2em;overflow:hidden}
+.source-link{white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal!important;word-break:normal!important}
+.wide-grid>.purple-card{min-width:0}
+@media(max-width:720px){
+  .cards,.wide-grid,.bottom-grid{grid-template-columns:minmax(0,1fr)!important}
+  .wide-grid>.purple-card{grid-column:auto}
+  .source-line{padding:13px 0}
+  .source-title b{font-size:11px}
+  .source-meta{font-size:9px}
+  .source-line p{font-size:10px;max-height:3em;overflow:hidden}
+}

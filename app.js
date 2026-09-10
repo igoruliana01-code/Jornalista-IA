@@ -7,11 +7,19 @@ function tab(id){document.querySelectorAll(".panel").forEach(p=>p.classList.remo
 document.querySelectorAll(".nav").forEach(n=>n.onclick=()=>tab(n.dataset.tab));
 function mh(icon,title){return `<div class="mini-head"><div class="mini-icon">${icon}</div><h3>${title}</h3></div>`}
 function statusClass(s){s=String(s||"").toUpperCase();return /CONFLITO/.test(s)?"danger":/NÃO|NAO/.test(s)?"warn":"ok"}
+function cleanSourceWhy(text){
+ let t=String(text||"").replace(/https?:\/\/[^\s<]+/gi,"").replace(/www\.[^\s<]+/gi,"");
+ t=t.replace(/Encontrada na busca externa\s*\([^)]*\)\.?/gi,"Resultado encontrado na pesquisa externa.");
+ t=t.replace(/Resultado encontrado por [^.]+\.?/gi,"Resultado encontrado na pesquisa externa.");
+ t=t.replace(/\s{2,}/g," ").replace(/\s+([,.])/g,"$1").trim();
+ return t || "Resultado encontrado na pesquisa externa.";
+}
 function sourceHtml(s){
  const host=esc(s.domain||(()=>{try{return new URL(s.url).hostname.replace(/^www\./,"")}catch{return "fonte"}})());
  const date=esc(s.date||"Data não informada");
  const tier=esc(s.tier||"Fonte");
- return `<div class="source-line"><div class="source-top"><div class="source-title"><b>${esc(s.title||"Fonte sem título")}</b><div class="source-meta"><span>${host}</span><span>•</span><span>${date}</span></div></div><span class="tier-badge">${tier}</span></div><p>${esc(s.why||"")}</p><a class="source-link" href="${esc(s.url||"#")}" target="_blank" rel="noopener noreferrer">Abrir matéria ↗</a></div>`;
+ const why=esc(cleanSourceWhy(s.why));
+ return `<div class="source-line"><div class="source-top"><div class="source-title"><b>${esc(s.title||"Fonte sem título")}</b><div class="source-meta"><span>${host}</span><span>•</span><span>${date}</span></div></div><span class="tier-badge">${tier}</span></div><p>${why}</p><a class="source-link" href="${esc(s.url||"#")}" target="_blank" rel="noopener noreferrer">Abrir matéria ↗</a></div>`;
 }
 function sourceList(sources){return (sources||[]).slice(0,8).map(sourceHtml).join("")||"<p class=\"muted\">Nenhuma fonte retornada.</p>";}
 function render(d){

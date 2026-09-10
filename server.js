@@ -228,10 +228,10 @@ function shortDate(value=""){
 }
 function sourceCardData(r, why=""){
   const url=r.url||""; const host=hostOf(url)||r.source||r.provider||"Fonte";
-  return {title:r.title||"Fonte sem título",url,why:why||String(r.description||"").slice(0,220),type:"web",tier:classifyTier(url,r.source),provider:r.provider||"Busca externa",domain:host,date:shortDate(r.date)};
+  return {title:r.title||"Fonte sem título",url,why:String(why||r.description||"").replace(/https?:\/\/[^\s]+/gi,"").replace(/www\.[^\s]+/gi,"").replace(/Encontrada na busca externa\s*\([^)]*\)\.?/gi,"Resultado encontrado na pesquisa externa.").trim().slice(0,220),type:"web",tier:classifyTier(url,r.source),provider:r.provider||"Busca externa",domain:host,date:shortDate(r.date)};
 }
 function normalizeSources(data,research){
-  const external=research.results.map(r=>sourceCardData(r,`Encontrada na busca externa (${r.provider}). ${r.description||""}`.trim()));
+  const external=research.results.map(r=>sourceCardData(r,`Resultado encontrado na pesquisa externa. ${r.description||""}`.trim()));
   const generated=Array.isArray(data.sources)?data.sources:[];
   const allowed=new Map(external.map(x=>[x.url,x]));
   const final=[];
@@ -304,7 +304,7 @@ app.post("/api/analyze",async(req,res)=>{
         primary_evidence:"A pesquisa externa foi concluída, mas o Gemini não conseguiu analisar os resultados dentro do limite de tempo/cota.",
         summary:"As fontes abaixo foram encontradas, porém a análise automática não foi concluída. Revise as fontes antes de publicar.",
         confirmed:[],estimates:[],unconfirmed:[],conflicts:[],direct_evidence:[],context_evidence:[],contradiction_evidence:[],source_quality:"Pesquisa externa disponível; análise da IA pendente.",source_check:"As fontes foram obtidas externamente e não devem ser tratadas como confirmação automática.",sanity_check:["A busca externa funcionou.","A análise do Gemini não foi concluída.","A decisão editorial continua pendente de revisão humana."],
-        sources:e.research.results.slice(0,8).map(r=>sourceCardData(r,`Resultado encontrado por ${r.provider}. ${r.description||""}`.trim())),
+        sources:e.research.results.slice(0,8).map(r=>sourceCardData(r,`Resultado encontrado na pesquisa externa. ${r.description||""}`.trim())),
         hear:[],questions:[],check:["Revisar as fontes encontradas."],angle:"Aguardando análise do Gemini.",structure:[],headline:"Análise automática indisponível",dek:"As fontes foram encontradas, mas precisam de revisão.",lead:"A pesquisa externa encontrou fontes relacionadas à pauta.",risks:["Não publicar como confirmado sem revisar as fontes."],note:`Busca externa: ${e.research.results.length} resultados. Motivo da falha da IA: ${e.message}`
       });
     }
